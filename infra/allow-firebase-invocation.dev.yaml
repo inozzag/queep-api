@@ -1,4 +1,4 @@
-# Prepared, not applied. Requires the user's project-scoped authorization.
+# Applied with explicit user authorization on 2026-09-11 UTC.
 # Keep organization-wide policies and IAM domain restrictions unchanged.
 name: projects/721281571441/policies/run.managed.requireInvokerIam
 spec:

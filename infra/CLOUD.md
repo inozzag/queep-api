@@ -21,40 +21,43 @@ passam pela API, que verifica o token Firebase, revogação e proprietário.
 Storage está provisionado, mas upload de mídia ainda não foi implementado.
 Escala mínima zero reduz ociosidade; máximo de instâncias não é teto de gastos.
 
-## Acesso pendente
+## Acesso dos apps
 
-A organização exige `run.managed.requireInvokerIam` e restringe bindings `allUsers`.
-A API foi implantada **privada**. Apps não podem usá-la até autorizar e aplicar
-a exceção somente neste projeto. `allow-firebase-invocation.dev.yaml` foi preparado,
-mas não aplicado. Não alterar a política da organização.
-
-Após autorização explícita, aplicar o arquivo pelo `gcloud org-policies set-policy`,
-com `--project=queep-dev-hstlx --account=gazzoni@hstlx.com`, e publicar com
-`bash infra/deploy-dev.sh --public`. A borda recebe requisições dos apps e a API
-continua exigindo Firebase para cada endpoint de referências.
+Exceção `run.managed.requireInvokerIam=false` aplicada **somente em
+`projects/721281571441`**, com autorização explícita do usuário. A organização
+continua com `enforce: true`; seus demais projetos não receberam exceção.
+Cloud Run está com `invoker-iam-disabled: true`, permitindo acesso à borda pelos
+apps; a API continua exigindo Firebase para cada endpoint de referências.
 Esse é o [modelo de acesso documentado pelo Cloud Run](https://cloud.google.com/run/docs/authenticating/public).
+
+Para aplicar a exceção, foi usada uma permissão temporária de administração de
+políticas, condicionada a uma tag exclusiva do Queep e expiração em 30 minutos.
+A permissão, a associação da tag, o valor e a chave da tag foram removidos após
+a aplicação. A conta mantém apenas a função administrativa anterior na organização.
+O arquivo `allow-firebase-invocation.dev.yaml` registra a exceção vigente.
 
 ## Publicar e verificar
 
-`bash infra/deploy-dev.sh --private` publica mantendo IAM. O script fixa projeto,
+`bash infra/deploy-dev.sh --public` atualiza a API acessível aos apps;
+`--private` restaura a exigência IAM na borda. O script fixa projeto,
 conta, região e identidades; não depende dos defaults da máquina. `.gcloudignore`
 envia apenas Dockerfile, dependências e código da API.
 
 ```sh
 uv run python scripts/smoke-cloud.py \
   --api-url https://queep-api-721281571441.southamerica-east1.run.app \
-  --firebase-plist ../queep-apple/Config/Firebase/Development/iOS/GoogleService-Info.plist \
-  --via-iam
+  --firebase-plist ../queep-apple/Config/Firebase/Development/iOS/GoogleService-Info.plist
 ```
 
-`--via-iam` permite testar a implantação privada como desenvolvedor autorizado;
-isso não habilita acesso dos apps. Depois da liberação pública, repetir sem essa
-opção. O teste cria duas contas descartáveis, valida operações e isolamento e
+O teste padrão usa apenas Firebase, assim como os apps. `--via-iam` é opcional
+para diagnosticar uma implantação privada como desenvolvedor autorizado.
+O teste cria duas contas descartáveis, valida operações e isolamento e
 remove contas/conteúdo no final; fica apenas o tombstone contra reenvio tardio.
 Usar `/health` no Cloud Run; `/healthz` é reservado pela plataforma.
 
-**Validado em 10/09/2026:** build/deploy da revisão `queep-api-00002-d5g`, smoke
-com `--via-iam` aprovado (duas contas reais descartáveis, duas sessões, reenvio,
-isolamento, bloqueio de leitura direta, edição/conflitos e exclusão), 19 testes
-locais da API aprovados. As contas temporárias e o conteúdo foram removidos.
-Esse resultado não substitui a futura validação de acesso diretamente pelos apps.
+**Validado em 10/09/2026 (11/09 UTC):** revisão `queep-api-00002-d5g`; smoke aprovado
+sem IAM (duas contas descartáveis, duas sessões, reenvio, isolamento, bloqueio de
+leitura direta, edição/conflitos e exclusão). Também validado pela interface nativa:
+nota criada no Mac → aberta e editada no iPhone 17 simulado → alteração recuperada
+no Mac; revisão 2 conferida pela API. Sessões encerradas; contas temporárias e conteúdo
+removidos. Base local: 19 testes da API, 2 Swift e 1 teste de interface iOS aprovados.
