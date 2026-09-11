@@ -22,12 +22,14 @@ gcloud run jobs add-iam-policy-binding queep-image-cleanup "${cloud[@]}" --regio
   --role=roles/run.invoker --quiet
 
 operation=create
+header_flag=--headers
 if gcloud scheduler jobs describe queep-image-cleanup "${cloud[@]}" --location="$region" >/dev/null 2>&1; then
   operation=update
+  header_flag=--update-headers
 fi
 gcloud scheduler jobs "$operation" http queep-image-cleanup "${cloud[@]}" --location="$region" \
   --schedule='*/30 * * * *' --time-zone=Etc/UTC \
   --uri=https://run.googleapis.com/v2/projects/queep-dev-hstlx/locations/southamerica-east1/jobs/queep-image-cleanup:run \
-  --http-method=POST --message-body='{}' --headers=Content-Type=application/json \
+  --http-method=POST --message-body='{}' "$header_flag=Content-Type=application/json" \
   --oauth-service-account-email=queep-image-scheduler@queep-dev-hstlx.iam.gserviceaccount.com \
   --max-retry-attempts=2 --quiet

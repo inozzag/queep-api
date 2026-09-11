@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from fastapi import HTTPException
 from google.api_core.exceptions import Aborted, DeadlineExceeded, ServiceUnavailable
@@ -13,6 +14,11 @@ from queep.models import Capture, Edit, Interpretation, Library, Reference
 
 def fingerprint(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def new_job(uid, ref_id, revision, now):
+    return {"uid": uid, "reference_id": ref_id, "revision": revision, "state": "pending",
+            "created_at": now, "dispatch_after": now, "run_id": uuid4().hex, "attempts": 0}
 
 
 class Repository:
@@ -76,8 +82,7 @@ class Repository:
             }
             tx.set(doc, record)
             # Outbox and content are atomic. A later dispatcher can safely enqueue Cloud Tasks.
-            tx.set(job, {"uid": uid, "reference_id": ref_id, "revision": record["revision"],
-                         "state": "pending", "created_at": now})
+            tx.set(job, new_job(uid, ref_id, record["revision"], now))
             return record
 
         return Reference.model_validate(self.transact(write))

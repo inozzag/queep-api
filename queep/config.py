@@ -5,7 +5,7 @@ from typing import Literal
 import firebase_admin
 from firebase_admin import credentials, firestore, storage
 from google.auth.credentials import AnonymousCredentials
-from pydantic import Field, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -13,9 +13,18 @@ class Settings(BaseSettings):
     environment: Literal["local", "production"] = Field("production", alias="QUEEP_ENV")
     project: str = Field(alias="GOOGLE_CLOUD_PROJECT")
     bucket: str = Field(alias="QUEEP_STORAGE_BUCKET")
+    ai_enabled: bool = Field(False, alias="QUEEP_AI_ENABLED")
+    openrouter_key: SecretStr | None = Field(None, alias="OPENROUTER_API_KEY")
+    ai_daily_budget: float = Field(1.0, ge=0.01, le=100, alias="QUEEP_AI_DAILY_BUDGET_USD")
+    queue: str = Field("queep-references", alias="QUEEP_TASK_QUEUE")
+    region: str = Field("southamerica-east1", alias="QUEEP_REGION")
+    worker_url: str = Field("", alias="QUEEP_WORKER_URL")
+    task_identity: str = Field("", alias="QUEEP_TASK_IDENTITY")
 
     @model_validator(mode="after")
     def validate_emulators(self):
+        if self.ai_enabled and not self.openrouter_key:
+            raise ValueError("AI requires a backend OpenRouter key")
         hosts = [os.getenv(k) for k in
                  ("FIREBASE_AUTH_EMULATOR_HOST", "FIRESTORE_EMULATOR_HOST",
                   "FIREBASE_STORAGE_EMULATOR_HOST")]

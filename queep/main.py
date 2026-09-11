@@ -3,14 +3,20 @@ from typing import Annotated
 from uuid import UUID
 
 import anyio
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth
+from google.api_core.exceptions import DeadlineExceeded, FailedPrecondition, ServiceUnavailable
 
+from queep.ai import AI, AIError
 from queep.config import Settings, database, firebase_app, image_bucket
+from queep.dispatch import dispatch_one
 from queep.images import MAX_BYTES, Images
-from queep.models import Capture, Edit, Library, Reference
+from queep.jobs import Jobs
+from queep.models import Capture, Edit, Library, Reference, RetryAnalysis, Search, SearchResults
 from queep.repository import Repository
+from queep.search import search
+from queep.worker import engine
 
 
 @asynccontextmanager
@@ -71,8 +77,10 @@ def health():
 
 
 @app.put("/v1/references/{ref_id}", response_model=Reference)
-def create(ref_id: UUID, capture: Capture, uid: UID, repo: Repo):
-    return repo.save(uid, str(ref_id), capture)
+def create(ref_id: UUID, capture: Capture, uid: UID, repo: Repo, background: BackgroundTasks):
+    reference = repo.save(uid, str(ref_id), capture)
+    background.add_task(dispatch_one, uid, str(ref_id))
+    return reference
 
 
 @app.put("/v1/references/{ref_id}/image", response_model=Reference, openapi_extra={
@@ -81,14 +89,17 @@ def create(ref_id: UUID, capture: Capture, uid: UID, repo: Repo):
     }},
 })
 async def upload_image(ref_id: UUID, request: Request, uid: UID, media: Media,
+                       background: BackgroundTasks,
                        title: Annotated[str, Query(max_length=200)] = ""):
     data = bytearray()
     async for chunk in request.stream():
         if len(data) + len(chunk) > MAX_BYTES:
             raise HTTPException(413, "Escolha uma imagem de até 12 MB")
         data.extend(chunk)
-    return await anyio.to_thread.run_sync(media.upload, uid, str(ref_id), title.strip(),
-                                         bytes(data), limiter=image_limiter)
+    reference = await anyio.to_thread.run_sync(media.upload, uid, str(ref_id), title.strip(),
+                                             bytes(data), limiter=image_limiter)
+    background.add_task(dispatch_one, uid, str(ref_id))
+    return reference
 
 
 @app.get("/v1/references/{ref_id}/image", responses={200: {"content": {
@@ -112,8 +123,10 @@ def get(ref_id: UUID, uid: UID, repo: Repo):
 
 
 @app.patch("/v1/references/{ref_id}", response_model=Reference)
-def edit(ref_id: UUID, capture: Edit, uid: UID, repo: Repo):
-    return repo.save(uid, str(ref_id), capture, editing=True)
+def edit(ref_id: UUID, capture: Edit, uid: UID, repo: Repo, background: BackgroundTasks):
+    reference = repo.save(uid, str(ref_id), capture, editing=True)
+    background.add_task(dispatch_one, uid, str(ref_id))
+    return reference
 
 
 @app.delete("/v1/references/{ref_id}", status_code=204)
@@ -122,3 +135,21 @@ def delete(ref_id: UUID, uid: UID, repo: Repo, media: Media,
     repo.delete(uid, str(ref_id), revision)
     media.cleanup(uid, str(ref_id))
     return Response(status_code=204)
+
+
+@app.post("/v1/references/{ref_id}/retry", response_model=Reference)
+def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: UID,
+                   background: BackgroundTasks):
+    reference = Jobs(database()).retry(uid, str(ref_id), capture.revision)
+    background.add_task(dispatch_one, uid, str(ref_id))
+    return reference
+
+
+@app.post("/v1/search", response_model=SearchResults)
+def find_references(capture: Search, uid: UID, repo: Repo, ai: Annotated[AI, Depends(engine)]):
+    try:
+        return search(repo, ai, uid, capture.query)
+    except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:
+        raise HTTPException(
+            503, "A busca está temporariamente indisponível. Tente novamente.",
+        ) from exc

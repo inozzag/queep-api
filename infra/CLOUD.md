@@ -82,3 +82,14 @@ job/agendamento com o digest da revisão publicada. O script pressupõe a API
 `cloudscheduler.googleapis.com` habilitada e a identidade `queep-image-scheduler`
 existente. O job usa a identidade de execução da API e não possui endpoint público.
 Detalhes de recuperação: [IMAGES.md](IMAGES.md).
+
+## IA — entrega de 11/09/2026
+
+API `queep-api-00007-ckr`, worker `queep-worker-00002-z5z`: interpretação e busca
+ligadas. Worker exige IAM/OIDC; apenas
+`queep-task-invoker` invoca. API e worker acessam o segredo OpenRouter por suas
+identidades, sem chave exportada. Fila e agendamento recuperam a outbox.
+
+65 testes locais, smoke cloud de IA/CRUD/imagens, builds nativos e teste iOS de busca
+da nota criada no Mac aprovados. Contas/referências sintéticas removidas; a imagem
+manual anterior foi preservada e analisada. [Operação, limites e evidências](AI.md).

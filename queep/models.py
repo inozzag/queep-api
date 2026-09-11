@@ -72,3 +72,19 @@ class Reference(BaseModel):
 class Library(BaseModel):
     items: list[Reference]
     next_cursor: str | None = None
+
+
+class Search(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    query: str = Field(min_length=2, max_length=500)
+
+
+class SearchResults(BaseModel):
+    items: list[Reference]
+    has_pending: bool
+    candidate_limit: int = 10
+
+
+class RetryAnalysis(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: int = Field(ge=1)

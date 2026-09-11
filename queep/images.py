@@ -14,7 +14,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from queep.models import ImageInfo, Reference
-from queep.repository import Repository, fingerprint
+from queep.repository import Repository, fingerprint, new_job
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
@@ -193,13 +193,7 @@ class Images:
             tx.set(doc, record)
             tx.set(
                 self.repo.job(uid, ref_id),
-                {
-                    "uid": uid,
-                    "reference_id": ref_id,
-                    "revision": 1,
-                    "state": "pending",
-                    "created_at": now,
-                },
+                new_job(uid, ref_id, 1, now),
             )
             tx.update(manifest, {"state": "active", "cleanup_after": firestore.DELETE_FIELD})
             return record

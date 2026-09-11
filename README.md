@@ -1,6 +1,6 @@
 # Queep API
 
-Firebase Auth, notas/links/imagens, biblioteca paginada, edição, exclusão e outbox transacional. Python 3.12 + FastAPI + Firestore + Cloud Storage. Os apps nunca escolhem o proprietário de uma referência: ele vem do token validado.
+Firebase Auth, notas/links/imagens, biblioteca, interpretação assíncrona e busca semântica. Python 3.12 + FastAPI + Firestore + Cloud Storage + Cloud Tasks + OpenRouter. O proprietário vem do token validado.
 
 ## Rodar
 
@@ -31,12 +31,14 @@ Os testes usam Auth, Firestore e Storage emulados, incluindo concorrência, isol
 - `GET /v1/references/{UUID}`: abre referência.
 - `PATCH /v1/references/{UUID}`: exige `revision` e `mutation_id`; conflitos retornam 409.
 - `DELETE /v1/references/{UUID}?revision=N`: exclui conteúdo e trabalho pendente; mantém só tombstone contra reenvios tardios.
+- `POST /v1/search`: `{ "query": "interfaces claras de CRM" }`; até 10 candidatos, conferidos por IA, sem inventar resultados fora do acervo.
+- `POST /v1/references/{UUID}/retry`: `{ "revision": N }`; nova tentativa para análise em erro.
 
-Conteúdo e job são gravados na mesma transação. Links ainda não são visitados. Estado `queued` significa **salvo e aguardando análise**; esta entrega não executa IA nem afirma ter interpretado mídia. Busca semântica e interpretação ainda não estão disponíveis. Regras de mídia e recuperação de falhas em [infra/IMAGES.md](infra/IMAGES.md).
+Conteúdo e job são gravados na mesma transação. O worker privado interpreta notas/imagens e grava o vetor da revisão atual; entregas duplicadas ou antigas não republicam conteúdo. Links ainda não são visitados: título, endereço e contexto ficam pesquisáveis com cobertura parcial. Regras de mídia em [infra/IMAGES.md](infra/IMAGES.md) e operação de IA em [infra/AI.md](infra/AI.md).
 
 ## Próxima entrega
 
-Dispatcher da outbox → Cloud Tasks → worker privado; processamento por revisão; interpretação via OpenRouter e busca. A [comparação de modelos](evaluation/README.md) roda separadamente, com dados sintéticos e orçamento limitado. Antes de produção: cotas, App Check/abuso, métricas sem conteúdo privado, exclusão de conta, retenção de tombstones e integração de assinatura.
+Extração de links/vídeos e avaliação em acervos maiores. A [comparação de modelos](evaluation/README.md) usa dados sintéticos e orçamento limitado. Antes de produção: cotas por plano, App Check/abuso, exclusão de conta, retenção de tombstones e integração de assinatura. O teto de desenvolvimento não substitui os limites comerciais.
 
 O ambiente cloud de desenvolvimento está acessível aos apps, com autenticação Firebase
 e sincronização Mac/iPhone verificadas. Estado e comandos em

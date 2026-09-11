@@ -67,6 +67,12 @@ def main():
 
     users = []
     reference = None
+
+    def same_content(actual, expected):
+        # Worker updates can legitimately occur between two reads/retries.
+        fields = ("id", "kind", "title", "text", "url", "revision", "created_at", "image")
+        assert all(actual.get(field) == expected.get(field) for field in fields)
+
     try:
         assert api("GET", f"{base}/health") == {"status": "ok"}
         api("GET", f"{base}/v1/references", expected=401)
@@ -84,9 +90,9 @@ def main():
         capture = {"kind": "note", "title": "Validação de nuvem",
                    "text": "CRM branco e notas sincronizadas."}
         reference = api("PUT", url, capture, token)
-        assert api("PUT", url, capture, token) == reference
-        assert api("GET", url, token=second_session) == reference
-        assert api("GET", f"{base}/v1/references", token=token)["items"][0] == reference
+        same_content(api("PUT", url, capture, token), reference)
+        same_content(api("GET", url, token=second_session), reference)
+        same_content(api("GET", f"{base}/v1/references", token=token)["items"][0], reference)
         api("GET", url, token=users[1][0]["idToken"], expected=404)
         api("PUT", url, {**capture, "text": "Reenvio diferente"}, token, expected=409)
         direct = (f"https://firestore.googleapis.com/v1/projects/{config['PROJECT_ID']}"
@@ -95,7 +101,7 @@ def main():
         edit = {**capture, "text": "Editado e sincronizado.", "revision": reference["revision"],
                 "mutation_id": str(uuid4())}
         reference = api("PATCH", url, edit, token)
-        assert api("PATCH", url, edit, token) == reference
+        same_content(api("PATCH", url, edit, token), reference)
         assert api("GET", url, token=second_session)["text"] == edit["text"]
         api("PATCH", url, {**edit, "mutation_id": str(uuid4())}, token, expected=409)
         api("DELETE", f"{url}?revision={reference['revision']}", token=token, expected=204)
@@ -111,8 +117,9 @@ def main():
         url = f"{base}/v1/references/{ref_id}"
         image_url = f"{url}/image?title=Cloud%20image"
         reference = api("PUT", image_url, data, token)
-        assert api("PUT", image_url, data, second_session) == reference
-        assert reference["image"]["width"] == 900 and reference["status"] == "queued"
+        same_content(api("PUT", image_url, data, second_session), reference)
+        assert reference["image"]["width"] == 900
+        assert reference["status"] in ("queued", "processing", "ready")
         for suffix in ("", "?thumbnail=true"):
             pixels = api("GET", f"{url}/image{suffix}", token=second_session, binary=True)
             assert Image.open(BytesIO(pixels)).size == ((560, 373) if suffix else (900, 600))
