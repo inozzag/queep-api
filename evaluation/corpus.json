@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "Acervo sintético inicial de texto; não comprova qualidade em imagens, áudio, vídeo ou sites reais.",
+  "references": [
+    {"id": "crm", "text": "Interface de CRM: pipeline comercial em colunas, fundo branco e cartões discretos; ficha do cliente com histórico e tarefas."},
+    {"id": "ai-tool", "text": "Ferramenta de IA que recorta gravações longas e sugere clipes curtos para redes sociais com legendas automáticas."},
+    {"id": "github", "text": "Repositório open source em Python para extrair texto de PDFs digitalizados com OCR. Pode rodar no computador sem enviar documentos a servidores."},
+    {"id": "stack", "text": "Anotação de um vídeo: para um MVP web, o autor recomenda PostgreSQL, Python e uma interface simples. O melhor stack é aquele que o time consegue manter."},
+    {"id": "startup", "text": "História de uma startup que começou como ferramenta interna de agendamento e descobriu demanda entre pequenas clínicas."},
+    {"id": "content", "text": "Dicas para conteúdo: abrir o vídeo com um problema concreto, mostrar uma demonstração e terminar com uma ação simples."},
+    {"id": "sneaker", "text": "Tênis de corrida branco com amortecimento, cabedal respirável e detalhe azul no calcanhar."},
+    {"id": "shirt", "text": "Camiseta branca oversized de algodão, sem estampa, com gola reforçada."},
+    {"id": "laptop", "text": "Notebook para edição de vídeo: priorizar memória suficiente, tela com cores precisas e autonomia longe da tomada."},
+    {"id": "phone", "text": "Celular compacto com boa câmera para vídeo e bateria que dure um dia. Referência de comparação entre modelos."},
+    {"id": "course", "text": "Curso sobre iluminação e fotografia de produtos para pequenos negócios."},
+    {"id": "game", "text": "Jogo cooperativo de exploração espacial em que a equipe precisa consertar a nave e administrar oxigênio."},
+    {"id": "brutalist", "text": "Identidade visual brutalista: tipografia enorme, composição crua, bordas fortes e alto contraste em preto e branco."},
+    {"id": "health-saas", "text": "Empresa de software de gestão para clínicas: agenda, prontuário e cobrança em uma assinatura mensal."}
+  ],
+  "queries": [
+    {"id": "q1", "query": "interfaces para organizar vendas", "mode": "known", "expected": ["crm"]},
+    {"id": "q2", "query": "IA para transformar vídeos em cortes", "mode": "known", "expected": ["ai-tool"]},
+    {"id": "q3", "query": "github para ler PDF escaneado offline", "mode": "known", "expected": ["github"]},
+    {"id": "q4", "query": "a dica sobre escolher tecnologia para um MVP", "mode": "known", "expected": ["stack"]},
+    {"id": "q5", "query": "ideias para melhorar meus vídeos", "mode": "set", "expected": ["content", "ai-tool"]},
+    {"id": "q6", "query": "roupas brancas", "mode": "set", "expected": ["shirt", "sneaker"]},
+    {"id": "q7", "query": "brutalist brand references", "mode": "known", "expected": ["brutalist"]},
+    {"id": "q8", "query": "companies serving clinics", "mode": "set", "expected": ["health-saas", "startup"]},
+    {"id": "q9", "query": "um jogo de arrumar nave com amigos", "mode": "known", "expected": ["game"]},
+    {"id": "q10", "query": "aprender a fotografar produtos", "mode": "known", "expected": ["course"]},
+    {"id": "q11", "query": "computador para editar vídeo fora de casa", "mode": "known", "expected": ["laptop"]},
+    {"id": "q12", "query": "receitas de bolo que salvei", "mode": "empty", "expected": []}
+  ]
+}
