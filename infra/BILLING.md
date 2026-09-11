@@ -27,26 +27,35 @@ Listar, abrir e excluir referências continuam liberados à conta autenticada.
 Falha de confirmação retorna erro recuperável, sem conceder acesso.
 Esta entrega suporta assinaturas recorrentes; vitalício/promocionais ficam fora.
 
-## Configuração de teste pendente
+## Test Store configurado
 
-1. Criar um projeto **Queep** no RevenueCat e usar o mesmo projeto para Mac/iPhone.
-2. Criar o entitlement `queep_pro`; no Test Store, associar produtos recorrentes
-   a ele e a uma offering marcada como atual. Preço final e teste gratuito seguem
-   indefinidos; os valores do Test Store são apenas de teste.
-3. Criar uma chave secreta **API V1** exclusiva e copiar a chave pública `test_…`.
-   No terminal executar `python3 scripts/configure-revenuecat.py`. As chaves ficam
-   em `.env.billing` e no xcconfig de desenvolvimento, ignorados pelo Git e 0600.
-   O script não ativa a nuvem nem realiza compras.
-4. Para teste local, iniciar a API com `.env.example`, `.env.evaluation` e
+Projeto Queep `f6e36522`, app Test Store `appf755aea124`, entitlement `queep_pro`,
+offering atual `default` (`ofrng5f2f128c8a`), produtos recorrentes `monthly` e `yearly`.
+Preço final e teste gratuito seguem indefinidos; os valores são apenas de teste.
+Nenhum projeto RevenueCat anterior foi alterado.
+
+1. No terminal executar `python3 scripts/configure-revenuecat.py` com a chave pública
+   `test_…`. A consulta de assinante da API V1 aceita essa chave; não é necessária uma
+   chave secreta administrativa. Configurações ficam em `.env.billing` e no xcconfig
+   de desenvolvimento, ignorados pelo Git e 0600. O script não altera a nuvem nem compra.
+2. Para teste local, iniciar a API com `.env.example`, `.env.evaluation` e
    **`.env.billing` por último**. Recompilar apps. A API passará a exigir assinatura
    nesse processo; não interromper o ambiente comum sem combinar o teste.
-5. Para teste na nuvem: armazenar chave V1 e token de webhook no Secret Manager,
+3. Para teste de acesso pago na nuvem: configurar a chave de consulta V1 e o token de webhook,
    conceder acesso somente à identidade `queep-api`, vincular os segredos à API e
    definir `QUEEP_BILLING_MODE=required`, `QUEEP_BILLING_ACCEPT_SANDBOX=true`.
    Configurar no RevenueCat a URL da API acima + `/v1/billing/webhook`, com o
    header Bearer exclusivo. Não usar OpenRouter nem chave pública como token.
-6. Validar compra/cancelamento/restauração, renovação/expiração/reembolso,
-   assinatura iniciada em um dispositivo e reconhecida no outro, e troca de conta.
+4. Testes externos restantes: entrega do webhook pelo RevenueCat, expiração/reembolso
+   e política de restauração/troca de conta. Estados simulados já têm testes de contrato.
+
+Webhook cloud preparado em `queep-api-00012-dx2`: segredo `queep-revenuecat-webhook:1`
+vinculado exclusivamente à identidade da API. URL:
+`https://queep-api-721281571441.southamerica-east1.run.app/v1/billing/webhook`.
+Sem header retorna 401; evento TEST autenticado retorna 200. O formulário RevenueCat
+está preenchido para **Sandbox / Test Store / All events**, aguardando o usuário colar
+o header e salvar. `python3 scripts/copy-revenuecat-webhook.py` copia o header sem
+imprimi-lo. **Recebimento direto do RevenueCat ainda não foi comprovado.**
 
 O ambiente `queep-dev-hstlx` permanece com `QUEEP_BILLING_MODE=development`:
 sem cobrança e sem exigência de assinatura. Scripts `deploy-*-dev.sh` explicitam
@@ -77,8 +86,31 @@ armazenamento e teste gratuito precisam ser decididas antes de abrir o beta.
 Testes de contrato com respostas simuladas RevenueCat e Firestore real em emulador
 cobrem expiração, cancelamento, graça, reembolso, sandbox, isolamento de identidade,
 eventos duplicados/atrasados, transferências, disputa durante consulta e indisponibilidade.
-Esses testes **não** substituem uma compra no Test Store e no sandbox Apple.
-Até configurar as contas externas, não há compra/restauração real validada.
+Esses testes **não** substituem as validações externas abaixo nem o sandbox Apple.
+
+Test Store real validado em 11/09/2026, sem cobrança: cancelamento do diálogo,
+falha simulada da loja, compra mensal, confirmação da API, restauração e reabertura
+no iPhone. A mesma assinatura foi reconhecida e restaurada no Mac. Reinstalação iOS
+com o novo bundle local também manteve o acesso. Assinante conseguiu salvar pela API;
+outra conta recebeu 402, não conseguiu forjar UID/acesso e não leu a referência privada.
+Nota e conta descartáveis removidas. Biblioteca cloud reaberta com as quatro referências.
+
+Testes externos são opt-in: criar `.local/revenuecat-test-account.json` no repo Apple
+somente durante a rodada, usando a conta emulada `preview@queep.test`. API deve estar
+em modo `required` com Test Store configurado. Executar individualmente, nesta ordem:
+`RevenueCatTests/testRealTestStoreCancellationFailurePurchaseAndRestore` (exige conta
+sem assinatura ativa), `RevenueCatTests/testExistingTestStoreAccessAfterLocalAppReinstall`
+e `RevenueCatCrossDeviceTests/testPurchaseFromIPhoneIsActiveOnMac` (exigem assinatura ativa).
+Remover o marcador ao terminar e voltar a API local ao modo `development`.
+Os diálogos de compra só são confirmados quando identificados como Test Store.
+Ao encerrar esta rodada, marcador removido e API local restaurada. A tela de acesso
+de desenvolvimento passou novamente; testes externos foram ignorados como esperado.
+
+XCResults no repo Apple: `build-local/Logs/Test/Test-QueepiOS-2026.09.11_16-18-01--0300.xcresult`,
+`build-local/Logs/Test/Test-QueepiOS-2026.09.11_16-30-18--0300.xcresult` e
+`build-mac-local/Logs/Test/Test-QueepMacCloud-2026.09.11_16-29-16--0300.xcresult`.
+Logs `/tmp/queep-rc-ios-real-test.log`, `/tmp/queep-rc-ios-isolated-test.log`,
+`/tmp/queep-rc-mac-real-test.log`. Apple IAP real e sandbox Apple permanecem pendentes.
 
 Validado em 11/09/2026: 124 testes de backend (17 de assinaturas), lint, 3 testes Swift,
 builds Mac/iPhone e teste iOS da tela com emuladores e com API cloud. Conferência visual
