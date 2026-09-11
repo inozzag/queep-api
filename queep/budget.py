@@ -12,9 +12,10 @@ from queep.repository import Repository
 class Budget:
     ALLOWANCE = .01
 
-    def __init__(self, db, daily_limit):
+    def __init__(self, db, daily_limit, search_daily_limit=100):
         self.db = db
         self.limit = daily_limit
+        self.search_daily_limit = search_daily_limit
         self.repo = Repository(db)
 
     def reserve(self):
@@ -57,7 +58,8 @@ class Budget:
         def write(tx):
             old = doc.get(transaction=tx).to_dict() or {}
             last = old.get("last_search")
-            if old.get("searches", 0) >= 100 or (last and (now-last).total_seconds() < 1):
+            if (old.get("searches", 0) >= self.search_daily_limit
+                    or (last and (now-last).total_seconds() < 1)):
                 raise HTTPException(429, "Limite de buscas atingido. Tente mais tarde.")
             tx.set(doc, {"searches": old.get("searches", 0) + 1, "last_search": now})
         self.repo.transact(write)

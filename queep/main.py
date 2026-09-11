@@ -9,6 +9,7 @@ from firebase_admin import auth
 from google.api_core.exceptions import DeadlineExceeded, FailedPrecondition, ServiceUnavailable
 
 from queep.ai import AI, AIError
+from queep.billing import Access, Billing, Webhook
 from queep.config import Settings, database, firebase_app, image_bucket
 from queep.dispatch import dispatch_one
 from queep.images import MAX_BYTES, Images
@@ -46,6 +47,21 @@ def user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bea
 UID = Annotated[str, Depends(user)]
 
 
+def billing():
+    return Billing(database(), Settings())
+
+
+Subscriptions = Annotated[Billing, Depends(billing)]
+
+
+def paid_user(uid: UID, subscriptions: Subscriptions):
+    subscriptions.require(uid)
+    return uid
+
+
+PaidUID = Annotated[str, Depends(paid_user)]
+
+
 def repository():
     return Repository(database())
 
@@ -76,8 +92,35 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/v1/billing/access", response_model=Access)
+def subscription_access(uid: UID, subscriptions: Subscriptions):
+    return subscriptions.access(uid)
+
+
+@app.post("/v1/billing/sync", response_model=Access)
+def sync_subscription(uid: UID, subscriptions: Subscriptions):
+    return subscriptions.access(uid, force=True)
+
+
+@app.post("/v1/billing/webhook")
+async def subscription_event(request: Request, subscriptions: Subscriptions):
+    subscriptions.authenticate_webhook(request.headers.get("authorization"))
+    raw = bytearray()
+    async for chunk in request.stream():
+        if len(raw) + len(chunk) > 65536:
+            raise HTTPException(413, "Evento muito grande")
+        raw.extend(chunk)
+    from pydantic import ValidationError
+    try:
+        event = Webhook.model_validate_json(bytes(raw)).event
+    except ValidationError as error:
+        raise HTTPException(422, "Evento inválido") from error
+    await anyio.to_thread.run_sync(subscriptions.event, event)
+    return {"received": True}
+
+
 @app.put("/v1/references/{ref_id}", response_model=Reference)
-def create(ref_id: UUID, capture: Capture, uid: UID, repo: Repo, background: BackgroundTasks):
+def create(ref_id: UUID, capture: Capture, uid: PaidUID, repo: Repo, background: BackgroundTasks):
     reference = repo.save(uid, str(ref_id), capture)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
@@ -88,7 +131,7 @@ def create(ref_id: UUID, capture: Capture, uid: UID, repo: Repo, background: Bac
         "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
     }},
 })
-async def upload_image(ref_id: UUID, request: Request, uid: UID, media: Media,
+async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Media,
                        background: BackgroundTasks,
                        title: Annotated[str, Query(max_length=200)] = ""):
     data = bytearray()
@@ -123,7 +166,7 @@ def get(ref_id: UUID, uid: UID, repo: Repo):
 
 
 @app.patch("/v1/references/{ref_id}", response_model=Reference)
-def edit(ref_id: UUID, capture: Edit, uid: UID, repo: Repo, background: BackgroundTasks):
+def edit(ref_id: UUID, capture: Edit, uid: PaidUID, repo: Repo, background: BackgroundTasks):
     reference = repo.save(uid, str(ref_id), capture, editing=True)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
@@ -138,7 +181,7 @@ def delete(ref_id: UUID, uid: UID, repo: Repo, media: Media,
 
 
 @app.post("/v1/references/{ref_id}/retry", response_model=Reference)
-def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: UID,
+def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: PaidUID,
                    background: BackgroundTasks):
     reference = Jobs(database()).retry(uid, str(ref_id), capture.revision)
     background.add_task(dispatch_one, uid, str(ref_id))
@@ -146,7 +189,7 @@ def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: UID,
 
 
 @app.post("/v1/search", response_model=SearchResults)
-def find_references(capture: Search, uid: UID, repo: Repo, ai: Annotated[AI, Depends(engine)]):
+def find_references(capture: Search, uid: PaidUID, repo: Repo, ai: Annotated[AI, Depends(engine)]):
     try:
         return search(repo, ai, uid, capture.query)
     except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:

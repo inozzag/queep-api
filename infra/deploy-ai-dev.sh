@@ -12,7 +12,7 @@ revision=$(gcloud run services describe queep-api "${cloud[@]}" --region="$regio
 digest=$(gcloud run revisions describe "$revision" "${cloud[@]}" --region="$region" \
   --format='value(status.imageDigest)')
 test -n "$digest"
-settings="QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app,QUEEP_AI_ENABLED=true,QUEEP_AI_DAILY_BUDGET_USD=1,QUEEP_WORKER_URL=$worker_url,QUEEP_TASK_IDENTITY=$identity,QUEEP_TASK_QUEUE=queep-references,QUEEP_REGION=$region"
+settings="QUEEP_ENV=production,QUEEP_BILLING_MODE=development,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app,QUEEP_AI_ENABLED=true,QUEEP_AI_DAILY_BUDGET_USD=1,QUEEP_WORKER_URL=$worker_url,QUEEP_TASK_IDENTITY=$identity,QUEEP_TASK_QUEUE=queep-references,QUEEP_REGION=$region"
 secret_version=$(gcloud secrets versions describe latest --secret=queep-openrouter \
   "${cloud[@]}" --format='value(name.basename())')
 test -n "$secret_version"

@@ -52,7 +52,7 @@ def engine():
     if not settings.ai_enabled:
         raise HTTPException(503, "Processamento de IA indisponível")
     return AI(settings.openrouter_key.get_secret_value(),
-              Budget(database(), settings.ai_daily_budget))
+              Budget(database(), settings.ai_daily_budget, settings.search_daily_limit))
 
 
 def process(task, jobs, ai, images, reader=read_source):

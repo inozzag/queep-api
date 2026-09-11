@@ -14,7 +14,7 @@ gcloud run deploy queep-api \
   --region=southamerica-east1 --source=. \
   --build-service-account=projects/queep-dev-hstlx/serviceAccounts/queep-build@queep-dev-hstlx.iam.gserviceaccount.com \
   --service-account=queep-api@queep-dev-hstlx.iam.gserviceaccount.com \
-  --update-env-vars=QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app \
+  --update-env-vars=QUEEP_ENV=production,QUEEP_BILLING_MODE=development,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app \
   "${access[@]}" --min=0 --max=2 --cpu=1 --memory=1Gi \
   --concurrency=8 --timeout=120 --cpu-throttling --quiet
 

@@ -10,3 +10,5 @@ evaluation/runs/
 .emulator-data/
 .DS_Store
 *.egg-info/
+
+.env.billing

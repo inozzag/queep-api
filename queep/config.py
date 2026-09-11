@@ -20,9 +20,19 @@ class Settings(BaseSettings):
     region: str = Field("southamerica-east1", alias="QUEEP_REGION")
     worker_url: str = Field("", alias="QUEEP_WORKER_URL")
     task_identity: str = Field("", alias="QUEEP_TASK_IDENTITY")
+    billing_mode: Literal["development", "required"] = Field("required", alias="QUEEP_BILLING_MODE")
+    revenuecat_key: SecretStr | None = Field(None, alias="REVENUECAT_API_KEY")
+    revenuecat_webhook_token: SecretStr | None = Field(None, alias="REVENUECAT_WEBHOOK_TOKEN")
+    revenuecat_entitlement: str = Field("queep_pro", alias="REVENUECAT_ENTITLEMENT")
+    billing_accept_sandbox: bool = Field(False, alias="QUEEP_BILLING_ACCEPT_SANDBOX")
+    search_daily_limit: int = Field(100, ge=1, le=10000, alias="QUEEP_SEARCH_DAILY_LIMIT")
 
     @model_validator(mode="after")
     def validate_emulators(self):
+        if (self.billing_mode == "development" or self.billing_accept_sandbox) and not (
+            self.environment == "local" or self.project == "queep-dev-hstlx"
+        ):
+            raise ValueError("Billing bypass and sandbox require a development project")
         if self.ai_enabled and not self.openrouter_key:
             raise ValueError("AI requires a backend OpenRouter key")
         hosts = [os.getenv(k) for k in
