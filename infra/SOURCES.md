@@ -58,8 +58,14 @@ e [Beautiful Soup](https://www.crummy.com/software/BeautifulSoup/bs4/doc/).
 - Uma consulta inicialmente confundiu assunto principal e linguagem usada por uma
   biblioteca; a regra de conferência foi ajustada e ambas as rodadas finais passaram.
   Houve falha transitória de acesso a Python.org; o fallback preservou o link.
-- Deploy ainda não realizado: `gcloud` exige reautenticação de `gazzoni@hstlx.com`.
-  Depois dela, executar os três scripts de deploy indicados em AI.md e os smokes cloud.
-- Apps compilam com o detalhe do texto extraído. O teste iOS confirmou busca, abertura
-  e expansão, mas falhou por um identificador de acessibilidade herdado do contêiner.
-  Identificador corrigido; falta repetir o teste e a conferência visual com o Mac desbloqueado.
+- Publicado em desenvolvimento: API `queep-api-00009-kl4`, worker privado
+  `queep-worker-00003-b47` e job de limpeza com o mesmo digest da API.
+- Na nuvem, as 5 buscas de [fontes](../evaluation/results/cloud-sources-smoke.json)
+  e as 7 de [regressão](../evaluation/results/cloud-ai-smoke.json) passaram.
+  A regressão também verificou worker privado, isolamento entre contas e exclusão.
+- O teste iOS de busca/abertura/expansão passou em Debug local e CloudDevelopment após
+  a correção do identificador. Conferidos visualmente o iPhone e o detalhe no Mac;
+  a mesma referência pública foi encontrada pelo assunto e teve seu texto expandido.
+  O contexto opcional de links ocupa menos espaço, mantendo a área maior das notas.
+- Referências e contas descartáveis dos smokes removidas. Fixture nativa removida
+  por identificador, preservando as quatro referências existentes e a sessão do usuário.

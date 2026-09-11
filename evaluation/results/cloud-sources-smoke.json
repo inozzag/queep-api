@@ -1,0 +1,54 @@
+{
+  "tested_at": "2026-09-11T17:17:35.007420+00:00",
+  "execution": "cloud-tasks",
+  "project": "queep-dev-hstlx",
+  "sources": [
+    {
+      "url": "https://github.com/encode/httpx",
+      "state": "read",
+      "text_bytes": 3244
+    },
+    {
+      "url": "https://www.python.org/about/",
+      "state": "read",
+      "text_bytes": 2337
+    },
+    {
+      "url": "https://github.com/queep-public-test-missing-20260911/repository",
+      "state": "unavailable",
+      "text_bytes": 0
+    }
+  ],
+  "queries": [
+    {
+      "query": "Bibliotecas com clientes HTTP síncronos e assíncronos em Python",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Python HTTP library with HTTP/2 support",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Sobre a linguagem de programação Python",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Referências de tipografia brutalista",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Ferramentas para gerar vídeo com IA",
+      "expected_count": 0,
+      "found_count": 0,
+      "passed": true
+    }
+  ]
+}

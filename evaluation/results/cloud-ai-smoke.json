@@ -1,8 +1,9 @@
 {
-  "tested_at": "2026-09-11T13:05:52.017797+00:00",
+  "tested_at": "2026-09-11T17:20:03.108046+00:00",
+  "execution": "cloud-tasks",
   "project": "queep-dev-hstlx",
   "synthetic_references": 6,
-  "processing_seconds": 8.93,
+  "processing_seconds": 9.06,
   "worker_private": true,
   "account_isolation": true,
   "deleted_reference_excluded": true,
@@ -12,49 +13,49 @@
       "expected_count": 2,
       "found_count": 2,
       "passed": true,
-      "seconds": 3.54
+      "seconds": 4.03
     },
     {
       "query": "Calçados para jogar em quadra de saibro",
       "expected_count": 1,
       "found_count": 1,
       "passed": true,
-      "seconds": 3.3
+      "seconds": 2.83
     },
     {
       "query": "Laptop with 32 GB RAM for programming",
       "expected_count": 1,
       "found_count": 1,
       "passed": true,
-      "seconds": 2.7
+      "seconds": 2.54
     },
     {
       "query": "História de uma startup que mudou de segmento",
       "expected_count": 1,
       "found_count": 1,
       "passed": true,
-      "seconds": 2.42
+      "seconds": 2.96
     },
     {
       "query": "Repositórios de componentes para aplicativos SwiftUI",
       "expected_count": 1,
       "found_count": 1,
       "passed": true,
-      "seconds": 2.46
+      "seconds": 2.79
     },
     {
       "query": "Ferramentas de IA para gerar vídeos",
       "expected_count": 0,
       "found_count": 0,
       "passed": true,
-      "seconds": 2.32
+      "seconds": 2.89
     },
     {
       "query": "Receitas de bolo de chocolate",
       "expected_count": 0,
       "found_count": 0,
       "passed": true,
-      "seconds": 2.16
+      "seconds": 2.47
     }
   ]
 }

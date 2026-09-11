@@ -64,8 +64,8 @@ necessário. Não trocar modelo de embeddings sem migrar o espaço e reindexar.
 - Smoke cloud: 6 referências sintéticas (4 notas, 1 link, 1 imagem), 7 consultas
   PT/EN com conjuntos esperados completos na amostra; isolamento, acesso privado
   e exclusão depois de indexar. [Registro](../evaluation/results/cloud-ai-smoke.json).
-- Última rodada: processamento pendente concluído em 8,93 s após os uploads;
-  buscas entre 2,16 e 3,54 s. Amostra pequena; não é um SLA nem garantia de qualidade
+- Rodada cloud após leitura de fontes: processamento pendente concluído em 9,06 s
+  após os uploads; buscas entre 2,47 e 4,03 s. Amostra pequena; não é um SLA nem garantia de qualidade
   para todo tipo de material. Houve 429 transitório do provedor em outra referência;
   a nova tentativa pelo app concluiu. Uma chamada diagnóstica custou US$ 0,0003081.
 - Antes da rodada final, o smoke aguardou um índice ainda em construção e uma
