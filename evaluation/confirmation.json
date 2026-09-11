@@ -1,0 +1,12 @@
+[
+  {"id":"c1","query":"quero um curso para programar inimigos e colisões","mode":"known","expected":["game-course"]},
+  {"id":"c2","query":"o frasco LUME é a referência que preciso","mode":"known","expected":["image-3"]},
+  {"id":"c3","query":"Which tool can transcribe a meeting but cannot trim videos?","mode":"known","expected":["voice-tool"]},
+  {"id":"c4","query":"a recomendação de tecnologia que prioriza manutenção pelo próprio time","mode":"known","expected":["stack"]},
+  {"id":"c5","query":"calçados de corrida pretos, e não brancos","mode":"set","expected":["black-shoe"]},
+  {"id":"c6","query":"software voltado a lojas virtuais para conciliar pagamentos, excluindo clínicas","mode":"set","expected":["finance-saas"]},
+  {"id":"c7","query":"marcas escritas com letras brancas sobre um fundo preto","mode":"set","expected":["image-2"]},
+  {"id":"c8","query":"ferramentas para editar cortes de vídeo automaticamente; não quero apenas transcrever reunião","mode":"set","expected":["ai-tool"]},
+  {"id":"c9","query":"um jogo de futebol multiplayer local","mode":"empty","expected":[]},
+  {"id":"c10","query":"instruções passo a passo para fazer bolo de chocolate","mode":"empty","expected":[]}
+]

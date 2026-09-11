@@ -36,7 +36,7 @@ Conteúdo e job são gravados na mesma transação. Links ainda não são visita
 
 ## Próxima entrega
 
-Dispatcher da outbox → Cloud Tasks → worker privado; processamento por revisão; avaliação Gemini/embeddings e busca. Antes de produção: cotas, App Check/abuso, métricas sem conteúdo privado, exclusão de conta, retenção de tombstones e integração de assinatura.
+Dispatcher da outbox → Cloud Tasks → worker privado; processamento por revisão; interpretação via OpenRouter e busca. A [comparação de modelos](evaluation/README.md) roda separadamente, com dados sintéticos e orçamento limitado. Antes de produção: cotas, App Check/abuso, métricas sem conteúdo privado, exclusão de conta, retenção de tombstones e integração de assinatura.
 
 O ambiente cloud de desenvolvimento está acessível aos apps, com autenticação Firebase
 e sincronização Mac/iPhone verificadas. Estado e comandos em
