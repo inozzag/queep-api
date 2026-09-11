@@ -97,7 +97,7 @@ class Jobs:
         return bool(self.matches(job, work) and job.get("token") == work["token"]
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
-    def finish(self, work, analysis=None, vector=None, error=None):
+    def finish(self, work, analysis=None, vector=None, error=None, source=None):
         doc = self.db.collection("jobs").document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -121,6 +121,7 @@ class Jobs:
                                 else now + timedelta(seconds=30 * job["attempts"])})
             else:
                 tx.update(ref, {"status": "ready", "analysis": analysis.model_dump(),
+                                "source": source.model_dump() if source else None,
                                 "embedding": Vector(vector), "embedding_space": SPACE,
                                 "analysis_model": INTERPRETER["id"],
                                 "analysis_version": ANALYSIS_VERSION, "updated_at": now})

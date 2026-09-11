@@ -38,7 +38,7 @@ Conteúdo e job são gravados na mesma transação. O worker privado interpreta 
 
 ## Próxima entrega
 
-Extração de links/vídeos e avaliação em acervos maiores. A [comparação de modelos](evaluation/README.md) usa dados sintéticos e orçamento limitado. Antes de produção: cotas por plano, App Check/abuso, exclusão de conta, retenção de tombstones e integração de assinatura. O teto de desenvolvimento não substitui os limites comerciais.
+Leitura de páginas públicas/READMEs implementada; cobertura e limites em [SOURCES.md](infra/SOURCES.md). Próximos passos: fontes sociais/vídeos e avaliação em acervos maiores. A [comparação de modelos](evaluation/README.md) usa dados sintéticos e orçamento limitado. Antes de produção: cotas por plano, App Check/abuso, exclusão de conta, retenção de tombstones e integração de assinatura. O teto de desenvolvimento não substitui os limites comerciais.
 
 O ambiente cloud de desenvolvimento está acessível aos apps, com autenticação Firebase
 e sincronização Mac/iPhone verificadas. Estado e comandos em

@@ -8,12 +8,12 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, SPACE, AIError
+from queep.ai import AI, SPACE, AIError, document
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
 from queep.main import app as public_app
-from queep.models import Capture, Edit, Interpretation
+from queep.models import Capture, Edit, Interpretation, SourceContent
 from queep.repository import Repository
 from queep.search import search
 from queep.worker import app as worker_app
@@ -204,3 +204,86 @@ def test_search_rejects_ids_outside_candidates(library):
         "content": json.dumps({"ids": [str(uuid4())]})}}]})
     with pytest.raises(AIError, match="invalid_selection"):
         ai.verify("CRM", [ref])
+
+
+def source_fixture():
+    return SourceContent(state="read", title="HTTPX", url="https://github.com/encode/httpx",
+                         text="HTTPX is a Python HTTP client with synchronous and async APIs.",
+                         fetched_at=datetime.now(UTC), limitations=["Somente texto acessível."])
+
+
+def test_link_content_reaches_ai_embedding_verification_and_persistence(library):
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://github.com/encode/httpx"))
+    analysis = Interpretation(summary="Cliente HTTP Python síncrono e assíncrono", coverage="full")
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": analysis.model_dump_json()}}]})
+    documents = []
+    ai.embed = lambda text: documents.append(text) or VECTOR
+    reader_calls = []
+    def reader(url):
+        reader_calls.append(url)
+        return source_fixture()
+    task = task_for(repo, jobs, uid, ref)
+    assert process(task, jobs, ai, None, reader) == "ready"
+    assert process(task, jobs, ai, None, reader) == "ignored"
+    current = repo.get(uid, ref.id)
+    assert current.source == source_fixture().model_copy(update={
+        "fetched_at": current.source.fetched_at})
+    assert current.analysis.coverage == "partial" and len(reader_calls) == 1
+    assert "synchronous and async" in calls[0]["messages"][1]["content"][0]["text"]
+    assert "synchronous and async" in documents[0]
+    verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"ids": [current.id]})}}]})
+    assert verifier.verify("Cliente HTTP Python assíncrono", [current]) == [current.id]
+    assert "synchronous and async" in requests[0]["messages"][1]["content"]
+    # Editing discards old content, analysis and vector together.
+    updated = repo.save(uid, ref.id, Edit(kind="link", url="https://example.com", revision=1,
+                                         mutation_id=uuid4()), editing=True)
+    assert updated.source is None and updated.analysis is None
+    assert "embedding" not in repo.collection(uid).document(ref.id).get().to_dict()
+
+
+@pytest.mark.parametrize("action", ["edit", "delete"])
+def test_source_fetch_in_flight_cannot_publish_after_mutation(library, action):
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://example.com"))
+    def reader(_):
+        if action == "delete":
+            repo.delete(uid, ref.id, 1)
+        else:
+            repo.save(uid, ref.id, Edit(kind="link", url="https://example.org", revision=1,
+                                       mutation_id=uuid4()), editing=True)
+        return source_fixture()
+    assert process(task_for(repo, jobs, uid, ref), jobs, None, None, reader) == "stale"
+    assert not repo.collection(uid).document(ref.id).get().to_dict().get("source")
+
+
+def test_unavailable_source_still_becomes_searchable_from_user_context(library):
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", text="Minha referência de tipografia",
+                                               url="https://example.com"))
+    ai, calls, _ = fake_client({})
+    documents = []
+    ai.embed = lambda text: documents.append(text) or VECTOR
+    blocked = source_fixture().model_copy(update={"state": "unavailable", "text": ""})
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, None, lambda _: blocked) == "ready"
+    assert not calls and "tipografia" in documents[0]
+    assert repo.get(uid, ref.id).source.state == "unavailable"
+
+
+@pytest.mark.parametrize("kind", ["link", "image"])
+def test_ten_long_sources_fit_verifier_input_budget(library, kind):
+    *_, ref = library
+    source = source_fixture().model_copy(update={"text": '\\"' * 6000, "title": "X" * 200})
+    analysis = Interpretation(summary='\\"' * 1000, coverage="partial",
+                              appearance=['\\"' * 40] * 6, entities=['\\"' * 30] * 6)
+    refs = [ref.model_copy(update={"id": str(uuid4()), "kind": kind, "source": source,
+                                 "title": "X" * 200, "text": '\\"' * 10000,
+                                 "url": "https://example.com/" + "x" * 2000,
+                                 "analysis": analysis}) for _ in range(10)]
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": '{"ids":[]}'}}]})
+    assert ai.verify("Encontre uma referência", refs) == []
+    assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
+    assert len(document(refs[0], ANALYSIS).encode()) < 7000

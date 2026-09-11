@@ -1,7 +1,9 @@
 """End-to-end AI checks with synthetic content and disposable development accounts."""
+import argparse
 import json
 import plistlib
 import secrets
+import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,22 +17,28 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--local", action="store_true")
+    local = parser.parse_args().local
     config = plistlib.loads((ROOT.parent / "queep-apple/Config/Firebase/Development/iOS/"
                             "GoogleService-Info.plist").read_bytes())
     assert config["PROJECT_ID"] == "queep-dev-hstlx"
+    base = "http://127.0.0.1:8000" if local else BASE
+    auth_base = ("http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:"
+                 if local else "https://identitytoolkit.googleapis.com/v1/accounts:")
+    key = "local" if local else config["API_KEY"]
     client = httpx.Client(timeout=100)
     users, refs, checks = [], [], []
 
     def auth(action, body):
-        response = client.post("https://identitytoolkit.googleapis.com/v1/accounts:"
-                               f"{action}?key={config['API_KEY']}", json=body)
+        response = client.post(f"{auth_base}{action}?key={key}", json=body)
         if response.status_code != 200:
             raise AssertionError(f"Auth {action}: HTTP {response.status_code}")
         return response.json()
 
     def api(method, path, body=None, token=None, expected=200, data=None):
         token = token or users[0]["idToken"]
-        response = client.request(method, BASE + path, json=body, content=data,
+        response = client.request(method, base + path, json=body, content=data,
                                   headers={"Authorization": f"Bearer {token}"})
         if response.status_code != expected:
             raise AssertionError(f"{method} {path.split('?')[0]}: HTTP {response.status_code}")
@@ -44,8 +52,9 @@ def main():
         return identifier
 
     try:
-        assert client.post(WORKER + "/tasks/dispatch").status_code in (401, 403)
-        assert client.post(BASE + "/tasks/dispatch").status_code == 404
+        if not local:
+            assert client.post(WORKER + "/tasks/dispatch").status_code in (401, 403)
+        assert client.post(base + "/tasks/dispatch").status_code == 404
         for _ in range(2):
             users.append(auth("signUp", {"email": f"ai-smoke-{uuid4()}@example.invalid",
                                          "password": secrets.token_urlsafe(24),
@@ -67,6 +76,17 @@ def main():
         refs.append(api("PUT", f"/v1/references/{image_id}/image?title=Screenshot",
                         data=(ROOT / "evaluation/fixtures/001.png").read_bytes()))
         started = time.monotonic()
+        if local:
+            sys.path.insert(0, str(ROOT))
+            from queep.config import Settings, database, image_bucket
+            from queep.images import Images
+            from queep.jobs import Jobs
+            from queep.worker import engine, process
+            assert Settings().environment == "local"
+            jobs = Jobs(database())
+            for ref in refs:
+                task = jobs.payload(jobs.repo.job(users[0]["localId"], ref["id"]).get())
+                assert process(task, jobs, engine(), Images(database(), image_bucket())) == "ready"
         pending = {ref["id"] for ref in refs}
         while pending and time.monotonic() - started < 300:
             for identifier in list(pending):
@@ -84,7 +104,7 @@ def main():
                 time.sleep(5)
         assert not pending, "Asynchronous processing timed out"
         elapsed = round(time.monotonic() - started, 2)
-        print(f"PASS: 6 references processed asynchronously in {elapsed}s", flush=True)
+        print(f"PASS: 6 references processed in {elapsed}s", flush=True)
         queries = [
             ("Interfaces claras de CRM para vendas", {crm, image_id}),
             ("Calçados para jogar em quadra de saibro", {shoes}),
@@ -110,11 +130,14 @@ def main():
         api("DELETE", f"/v1/references/{crm}?revision=1", expected=204)
         result = api("POST", "/v1/search", {"query": "Nimbo CRM branco"})
         assert crm not in {ref["id"] for ref in result["items"]}
-        report = {"tested_at": datetime.now(UTC).isoformat(), "project": config["PROJECT_ID"],
+        report = {"tested_at": datetime.now(UTC).isoformat(),
+                  "execution": "local-worker" if local else "cloud-tasks",
+                  "project": "demo-queep" if local else config["PROJECT_ID"],
                   "synthetic_references": len(refs), "processing_seconds": elapsed,
-                  "worker_private": True, "account_isolation": True,
+                  "worker_private": None if local else True, "account_isolation": True,
                   "deleted_reference_excluded": True, "queries": checks}
-        (ROOT / "evaluation/results/cloud-ai-smoke.json").write_text(
+        filename = "local-ai-smoke.json" if local else "cloud-ai-smoke.json"
+        (ROOT / "evaluation/results" / filename).write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + "\n")
         assert all(check["passed"] for check in checks), "Search quality regression"
         print("PASS: natural-language search, empty matches, partial links, "

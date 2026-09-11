@@ -17,6 +17,7 @@ from queep.config import Settings, database, firebase_app, image_bucket
 from queep.dispatch import enqueue
 from queep.images import Images
 from queep.jobs import Jobs
+from queep.sources import read_source
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,7 +55,7 @@ def engine():
               Budget(database(), settings.ai_daily_budget))
 
 
-def process(task, jobs, ai, images):
+def process(task, jobs, ai, images, reader=read_source):
     work = jobs.claim(task)
     if not work:
         return "ignored"
@@ -63,11 +64,16 @@ def process(task, jobs, ai, images):
         data = images.read(work["uid"], ref.id)[0] if ref.kind == "image" else None
         if not jobs.current(work):
             return "stale"
+        if ref.kind == "link":
+            ref = ref.model_copy(update={"source": reader(ref.url)})
+            if not jobs.current(work):
+                return "stale"
         analysis = ai.interpret(ref, data)
         if not jobs.current(work):
             return "stale"
         vector = ai.embed(document(ref, analysis))
-        return "ready" if jobs.finish(work, analysis=analysis, vector=vector) else "stale"
+        return "ready" if jobs.finish(work, analysis=analysis, vector=vector,
+                                       source=ref.source) else "stale"
     except (AIError, HTTPException) as error:
         code = str(error) if isinstance(error, AIError) else f"http_{error.status_code}"
         jobs.finish(work, error=code)

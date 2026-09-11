@@ -1,0 +1,61 @@
+{
+  "tested_at": "2026-09-11T17:01:24.832293+00:00",
+  "project": "demo-queep",
+  "synthetic_references": 6,
+  "worker_private": null,
+  "account_isolation": true,
+  "deleted_reference_excluded": true,
+  "queries": [
+    {
+      "query": "Interfaces claras de CRM para vendas",
+      "expected_count": 2,
+      "found_count": 2,
+      "passed": true,
+      "seconds": 2.47
+    },
+    {
+      "query": "Calçados para jogar em quadra de saibro",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true,
+      "seconds": 2.1
+    },
+    {
+      "query": "Laptop with 32 GB RAM for programming",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true,
+      "seconds": 2.41
+    },
+    {
+      "query": "História de uma startup que mudou de segmento",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true,
+      "seconds": 3.09
+    },
+    {
+      "query": "Repositórios de componentes para aplicativos SwiftUI",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true,
+      "seconds": 2.32
+    },
+    {
+      "query": "Ferramentas de IA para gerar vídeos",
+      "expected_count": 0,
+      "found_count": 0,
+      "passed": true,
+      "seconds": 2.54
+    },
+    {
+      "query": "Receitas de bolo de chocolate",
+      "expected_count": 0,
+      "found_count": 0,
+      "passed": true,
+      "seconds": 2.29
+    }
+  ],
+  "post_processing_poll_seconds": 0.03,
+  "execution": "local-worker"
+}

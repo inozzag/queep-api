@@ -55,6 +55,16 @@ class ImageInfo(BaseModel):
     byte_count: int
 
 
+class SourceContent(BaseModel):
+    state: Literal["read", "unavailable"]
+    url: str = Field(max_length=4096)
+    title: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=12000)
+    fetched_at: datetime
+    truncated: bool = False
+    limitations: list[str] = Field(default_factory=list, max_length=4)
+
+
 class Reference(BaseModel):
     id: str
     kind: Literal["note", "link", "image"]
@@ -67,6 +77,7 @@ class Reference(BaseModel):
     updated_at: datetime
     analysis: Interpretation | None = None
     image: ImageInfo | None = None
+    source: SourceContent | None = None
 
 
 class Library(BaseModel):

@@ -15,7 +15,7 @@ de uma biblioteca grande. Consultas usam POST para não expor o texto em URLs.
 
 | Etapa | Modelo / rota |
 | --- | --- |
-| Notas e imagens | `google/gemini-2.5-flash-lite` / `google-vertex` |
+| Notas, imagens e texto de links | `google/gemini-2.5-flash-lite` / `google-vertex` |
 | Vetores de 768 dimensões | `google/gemini-embedding-2` / `google-vertex/us` |
 | Conferência da busca | `google/gemini-3.1-flash-lite` / `google-vertex/global` |
 
@@ -33,8 +33,9 @@ conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite 
 
 Imagens são reduzidas a 1536 px para interpretação. Notas longas recebem análise
 parcial; o documento vetorial usa até 3.500 bytes de texto e a análise. A conferência
-usa trechos de até 600 bytes por nota. Links não são visitados: só título, URL e
-contexto fornecido. Áudio, vídeo, leitura de sites, busca exaustiva, filtro textual
+usa trechos de até 600 bytes por nota. Links públicos recebem extração de texto,
+com cobertura parcial e limites descritos em [SOURCES.md](SOURCES.md).
+Áudio, vídeo, busca exaustiva, filtro textual
 complementar e localização de trechos longos permanecem fora desta entrega.
 
 ## Publicar
