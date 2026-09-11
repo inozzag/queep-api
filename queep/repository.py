@@ -4,6 +4,7 @@ import json
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
+from google.api_core.exceptions import Aborted, DeadlineExceeded, ServiceUnavailable
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
@@ -24,6 +25,19 @@ class Repository:
     def job(self, uid, ref_id):
         key = hashlib.sha256(f"{uid}/{ref_id}".encode()).hexdigest()
         return self.db.collection("jobs").document(key)
+
+    def transact(self, operation):
+        try:
+            return operation(self.db.transaction())
+        except (Aborted, DeadlineExceeded, ServiceUnavailable) as error:
+            raise HTTPException(503, "Serviço ocupado. Tente novamente.",
+                                headers={"Retry-After": "1"}) from error
+        except ValueError as error:
+            # The Firestore SDK wraps exhausted contention retries in ValueError.
+            if not isinstance(error.__cause__, Aborted):
+                raise
+            raise HTTPException(503, "Serviço ocupado. Tente novamente.",
+                                headers={"Retry-After": "1"}) from error
 
     def save(self, uid: str, ref_id: str, capture: Capture, editing=False):
         doc = self.collection(uid).document(ref_id)
@@ -64,7 +78,7 @@ class Repository:
                          "state": "pending", "created_at": now})
             return record
 
-        return Reference.model_validate(write(self.db.transaction()))
+        return Reference.model_validate(self.transact(write))
 
     def get(self, uid, ref_id):
         record = self.collection(uid).document(ref_id).get().to_dict()
@@ -110,7 +124,7 @@ class Repository:
                          "updated_at": datetime.now(UTC)})
             tx.delete(job)
 
-        remove(self.db.transaction())
+        self.transact(remove)
 
     def complete(self, uid, ref_id, revision, analysis: Interpretation):
         """Publish only if this job still belongs to the current, undeleted revision."""
@@ -127,4 +141,4 @@ class Repository:
             tx.delete(job)
             return True
 
-        return publish(self.db.transaction())
+        return self.transact(publish)

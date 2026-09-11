@@ -53,7 +53,8 @@ async def privacy_headers(request, call_next):
     return response
 
 
-@app.get("/healthz")
+@app.get("/health")
+@app.get("/healthz", include_in_schema=False)
 def health():
     return {"status": "ok"}
 

@@ -1,7 +1,7 @@
-.git
-.venv
-.env*
-*.log
-.firebase
-.emulator-data
-tests
+*
+!pyproject.toml
+!uv.lock
+!queep/
+!queep/**
+queep/**/__pycache__/
+queep/**/*.pyc

@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "demo-queep",
+    "dev": "queep-dev-hstlx"
+  }
+}

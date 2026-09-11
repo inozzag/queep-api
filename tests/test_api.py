@@ -1,9 +1,12 @@
 from concurrent.futures import ThreadPoolExecutor
+from time import sleep
 from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
+from google.api_core.exceptions import Aborted
 
 from queep.config import database
 from queep.main import app
@@ -131,11 +134,43 @@ def test_concurrent_retries_create_one_document_and_one_job(account):
     uid, _ = account
     ref_id = str(uuid4())
     repo = Repository(database())
+
+    def send(_):
+        # Retry the same capture if Firestore exhausts its contention attempts.
+        for attempt in range(4):
+            try:
+                return repo.save(uid, ref_id, Capture(**NOTE))
+            except HTTPException as error:
+                if error.status_code != 503 or attempt == 3:
+                    raise
+                sleep(float(error.headers["Retry-After"]))
+
     with ThreadPoolExecutor(max_workers=8) as pool:
-        results = list(pool.map(lambda _: repo.save(uid, ref_id, Capture(**NOTE)), range(12)))
+        results = list(pool.map(send, range(12)))
     assert all(r.revision == 1 for r in results)
     assert len(list(repo.collection(uid).stream())) == 1
     assert repo.job(uid, ref_id).get().to_dict()["revision"] == 1
+
+
+def test_exhausted_transaction_is_retryable_without_masking_other_errors(
+    client, account, monkeypatch,
+):
+    def exhausted(operation):
+        def fail(tx):
+            raise ValueError("Failed to commit transaction") from Aborted("contention")
+        return fail
+
+    monkeypatch.setattr("queep.repository.firestore.transactional", exhausted)
+    response = client.put(path(), json=NOTE, headers=account[1])
+    assert response.status_code == 503
+    assert response.headers["Retry-After"] == "1"
+    repo = Repository(database())
+
+    def unrelated(tx):
+        raise ValueError("unrelated")
+
+    with pytest.raises(ValueError, match="unrelated"):
+        repo.transact(unrelated)
 
 
 def test_pagination_and_deleted_items(client, account):

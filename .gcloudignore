@@ -1,0 +1,9 @@
+*
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!uv.lock
+!queep/
+!queep/**
+queep/**/__pycache__/
+queep/**/*.pyc

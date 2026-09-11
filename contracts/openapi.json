@@ -5,10 +5,10 @@
     "version": "0.1.0"
   },
   "paths": {
-    "/healthz": {
+    "/health": {
       "get": {
         "summary": "Health",
-        "operationId": "health_healthz_get",
+        "operationId": "health_health_get",
         "responses": {
           "200": {
             "description": "Successful Response",

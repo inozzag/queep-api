@@ -36,4 +36,10 @@ Conteúdo e job são gravados na mesma transação. Links ainda não são visita
 
 Storage com limites e uploads autorizados; dispatcher da outbox → Cloud Tasks → worker privado; processamento por revisão; avaliação Gemini/embeddings e busca. Antes de produção: cotas, App Check/abuso, métricas sem conteúdo privado, exclusão de conta, retenção de tombstones e integração de assinatura.
 
-Deploy ainda não executado. Produção exige `QUEEP_ENV=production`, `GOOGLE_CLOUD_PROJECT` e identidade Google via ADC; variáveis de emulador são rejeitadas. Regras de clientes negam acesso direto a Firestore/Storage nesta etapa. A API valida autorização; Admin SDK não usa essas regras.
+O ambiente cloud de desenvolvimento foi provisionado; a API ainda exige IAM na borda
+enquanto aguarda a exceção de política para acesso dos apps. Estado e comandos em
+[infra/CLOUD.md](infra/CLOUD.md). Fora dos emuladores, exige `QUEEP_ENV=production`,
+`GOOGLE_CLOUD_PROJECT` e identidade Google via ADC; variáveis de emulador são rejeitadas.
+Regras de clientes negam acesso direto a Firestore/Storage. A API valida autorização;
+Admin SDK não usa essas regras. Contenção transitória em transações retorna 503 com
+`Retry-After`; repetir o mesmo identificador e conteúdo é seguro.
