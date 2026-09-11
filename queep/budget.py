@@ -6,6 +6,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from google.cloud import firestore
 
+from queep.account_state import require_open
 from queep.repository import Repository
 
 
@@ -56,6 +57,7 @@ class Budget:
 
         @firestore.transactional
         def write(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict() or {}
             last = old.get("last_search")
             if (old.get("searches", 0) >= self.search_daily_limit

@@ -24,11 +24,18 @@ class Settings(BaseSettings):
     revenuecat_key: SecretStr | None = Field(None, alias="REVENUECAT_API_KEY")
     revenuecat_webhook_token: SecretStr | None = Field(None, alias="REVENUECAT_WEBHOOK_TOKEN")
     revenuecat_entitlement: str = Field("queep_pro", alias="REVENUECAT_ENTITLEMENT")
+    revenuecat_project_id: str = Field("", alias="REVENUECAT_PROJECT_ID")
+    revenuecat_delete_key: SecretStr | None = Field(None, alias="REVENUECAT_DELETE_KEY")
+    account_deletion_enabled: bool = Field(False, alias="QUEEP_ACCOUNT_DELETION_ENABLED")
     billing_accept_sandbox: bool = Field(False, alias="QUEEP_BILLING_ACCEPT_SANDBOX")
     search_daily_limit: int = Field(100, ge=1, le=10000, alias="QUEEP_SEARCH_DAILY_LIMIT")
 
     @model_validator(mode="after")
     def validate_emulators(self):
+        if self.environment == "production" and self.account_deletion_enabled and (
+            not self.revenuecat_project_id or not self.revenuecat_delete_key
+        ):
+            raise ValueError("Cloud account erasure requires configured RevenueCat cleanup")
         if (self.billing_mode == "development" or self.billing_accept_sandbox) and not (
             self.environment == "local" or self.project == "queep-dev-hstlx"
         ):

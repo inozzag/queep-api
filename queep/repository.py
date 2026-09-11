@@ -9,6 +9,7 @@ from google.api_core.exceptions import Aborted, DeadlineExceeded, ServiceUnavail
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
+from queep.account_state import require_open
 from queep.models import Capture, Edit, Interpretation, Library, Reference
 
 
@@ -54,6 +55,7 @@ class Repository:
 
         @firestore.transactional
         def write(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             if editing:
                 if not old or old.get("deleted"):
@@ -88,12 +90,14 @@ class Repository:
         return Reference.model_validate(self.transact(write))
 
     def get(self, uid, ref_id):
+        require_open(self.db, uid)
         record = self.collection(uid).document(ref_id).get().to_dict()
         if not record or record.get("deleted"):
             raise HTTPException(404, "Referência não encontrada")
         return Reference.model_validate(record)
 
     def list(self, uid, limit, cursor):
+        require_open(self.db, uid)
         query = (self.collection(uid).where(filter=FieldFilter("deleted", "==", False))
                  .order_by("created_at", direction=firestore.Query.DESCENDING)
                  .order_by("id", direction=firestore.Query.DESCENDING))
@@ -122,6 +126,7 @@ class Repository:
 
         @firestore.transactional
         def remove(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             if not old or old.get("deleted"):
                 return
@@ -146,6 +151,7 @@ class Repository:
 
         @firestore.transactional
         def publish(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             if not old or old.get("deleted") or old["revision"] != revision:
                 return False

@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -8,6 +9,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth
 from google.api_core.exceptions import DeadlineExceeded, FailedPrecondition, ServiceUnavailable
 
+from queep.account_state import deletion_document, require_open
+from queep.accounts import Accounts
 from queep.ai import AI, AIError
 from queep.billing import Access, Billing, Webhook
 from queep.config import Settings, database, firebase_app, image_bucket
@@ -38,10 +41,11 @@ def user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bea
         claims = auth.verify_id_token(
             credentials.credentials, app=firebase_app(), check_revoked=True,
         )
-        return claims["uid"]
     except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
             auth.UserNotFoundError, ValueError) as exc:
         raise HTTPException(401, "Sessão inválida", headers={"WWW-Authenticate": "Bearer"}) from exc
+    require_open(database(), claims["uid"])
+    return claims["uid"]
 
 
 UID = Annotated[str, Depends(user)]
@@ -95,6 +99,37 @@ def health():
 @app.get("/v1/billing/access", response_model=Access)
 def subscription_access(uid: UID, subscriptions: Subscriptions):
     return subscriptions.access(uid)
+
+
+@app.post("/v1/account/deletion", status_code=202)
+def delete_account(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+                   background: BackgroundTasks):
+    if not credentials:
+        raise HTTPException(401, "Entre na sua conta")
+    try:
+        claims = auth.verify_id_token(credentials.credentials, app=firebase_app())
+        uid = claims["uid"]
+        # A retry of an accepted request remains safe after sessions were revoked.
+        existing = deletion_document(database(), uid).get().to_dict()
+        if not existing:
+            if not Settings().account_deletion_enabled:
+                raise HTTPException(503, "A exclusão de conta ainda não está disponível.")
+            auth.verify_id_token(credentials.credentials, app=firebase_app(), check_revoked=True)
+            age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
+            if not 0 <= age <= 300:
+                raise HTTPException(403, "Confirme sua senha novamente para excluir a conta.")
+    except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
+            auth.UserNotFoundError, ValueError) as exc:
+        raise HTTPException(401, "Sessão inválida") from exc
+    service = Accounts(database(), image_bucket(), Settings())
+    service.request(uid)
+    background.add_task(service.resume, uid)
+    return {"status": "deleting"}
+
+
+@app.get("/v1/account")
+def account_status(uid: UID):
+    return {"active": True}
 
 
 @app.post("/v1/billing/sync", response_model=Access)

@@ -12,3 +12,4 @@ evaluation/runs/
 *.egg-info/
 
 .env.billing
+.env.accounts

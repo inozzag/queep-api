@@ -16,6 +16,7 @@ from fastapi import HTTPException
 from google.cloud import firestore
 from pydantic import BaseModel, Field
 
+from queep.account_state import is_closed, require_open
 from queep.repository import Repository
 
 
@@ -116,6 +117,7 @@ class Billing:
             raise unavailable() from error
 
     def access(self, uid, force=False):
+        require_open(self.db, uid)
         now = datetime.now(UTC)
         if self.settings.billing_mode == "development":
             return Access(mode="development", active=True, checked_at=now)
@@ -124,6 +126,7 @@ class Billing:
 
         @firestore.transactional
         def claim(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict() or {}
             if old.get("retry_after", now) > now:
                 raise unavailable()
@@ -147,6 +150,7 @@ class Billing:
 
             @firestore.transactional
             def publish(tx):
+                require_open(self.db, uid, tx)
                 current = doc.get(transaction=tx).to_dict() or {}
                 if current.get("lease") != token or current.get("generation", 0) != generation:
                     # An event arrived during the provider request. Do not publish that snapshot.
@@ -163,6 +167,8 @@ class Billing:
         except HTTPException:
             @firestore.transactional
             def backoff(tx):
+                if is_closed(self.db, uid, tx):
+                    return
                 current = doc.get(transaction=tx).to_dict() or {}
                 if current.get("lease") == token:
                     tx.update(doc, {"valid_until": now,
@@ -172,6 +178,8 @@ class Billing:
         finally:
             @firestore.transactional
             def release(tx):
+                if is_closed(self.db, uid, tx):
+                    return
                 current = doc.get(transaction=tx).to_dict() or {}
                 if current.get("lease") == token:
                     tx.update(doc, {"lease": firestore.DELETE_FIELD,
@@ -206,7 +214,8 @@ class Billing:
         def invalidate(tx):
             if receipt.get(transaction=tx).exists:
                 return
-            docs = [self.document(uid) for uid in sorted(identities)]
+            docs = [self.document(uid) for uid in sorted(identities)
+                    if not is_closed(self.db, uid, tx)]
             records = [doc.get(transaction=tx).to_dict() or {} for doc in docs]
             # All affected aliases and both sides of transfers are invalidated atomically.
             # The next access consults RevenueCat instead of applying an out-of-order event.

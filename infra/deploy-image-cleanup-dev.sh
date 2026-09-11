@@ -14,7 +14,7 @@ test -n "$image_digest"
 gcloud run jobs deploy queep-image-cleanup "${cloud[@]}" --region="$region" \
   --image="$image_digest" --command=.venv/bin/python --args=-m,queep.cleanup_images \
   --service-account=queep-api@queep-dev-hstlx.iam.gserviceaccount.com \
-  --set-env-vars=QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app \
+  --update-env-vars=QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app \
   --tasks=1 --parallelism=1 --max-retries=1 --task-timeout=300s --cpu=1 --memory=512Mi --quiet
 
 gcloud run jobs add-iam-policy-binding queep-image-cleanup "${cloud[@]}" --region="$region" \
@@ -28,7 +28,7 @@ if gcloud scheduler jobs describe queep-image-cleanup "${cloud[@]}" --location="
   header_flag=--update-headers
 fi
 gcloud scheduler jobs "$operation" http queep-image-cleanup "${cloud[@]}" --location="$region" \
-  --schedule='*/30 * * * *' --time-zone=Etc/UTC \
+  --schedule='*/5 * * * *' --time-zone=Etc/UTC \
   --uri=https://run.googleapis.com/v2/projects/queep-dev-hstlx/locations/southamerica-east1/jobs/queep-image-cleanup:run \
   --http-method=POST --message-body='{}' "$header_flag=Content-Type=application/json" \
   --oauth-service-account-email=queep-image-scheduler@queep-dev-hstlx.iam.gserviceaccount.com \

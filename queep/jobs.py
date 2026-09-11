@@ -8,6 +8,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.firestore_v1.vector import Vector
 
+from queep.account_state import is_closed, require_open
 from queep.ai import ANALYSIS_VERSION, INTERPRETER, SPACE
 from queep.models import Reference
 from queep.repository import Repository, new_job
@@ -28,6 +29,9 @@ class Jobs:
         def write(tx):
             old = doc.get(transaction=tx).to_dict()
             if old and "run_id" not in old:
+                if is_closed(self.db, old["uid"], tx):
+                    tx.delete(doc)
+                    return
                 tx.set(doc, new_job(old["uid"], old["reference_id"], old["revision"],
                                     datetime.now(UTC)))
         self.repo.transact(write)
@@ -71,6 +75,9 @@ class Jobs:
             job = doc.get(transaction=tx).to_dict()
             if not self.matches(job, task) or job["state"] == "failed":
                 return None
+            if is_closed(self.db, job["uid"], tx):
+                tx.delete(doc)
+                return None
             reference = self.repo.collection(job["uid"]).document(job["reference_id"])
             record = reference.get(transaction=tx).to_dict()
             if not record or record.get("deleted") or record["revision"] != task["revision"]:
@@ -93,6 +100,8 @@ class Jobs:
         return self.repo.transact(write)
 
     def current(self, work):
+        if is_closed(self.db, work["uid"]):
+            return False
         job = self.db.collection("jobs").document(work["job_id"]).get().to_dict()
         return bool(self.matches(job, work) and job.get("token") == work["token"]
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
@@ -104,6 +113,8 @@ class Jobs:
 
         @firestore.transactional
         def write(tx):
+            if is_closed(self.db, work["uid"], tx):
+                return False
             job = doc.get(transaction=tx).to_dict()
             record = ref.get(transaction=tx).to_dict()
             if (not self.matches(job, work) or job.get("token") != work["token"]
@@ -135,6 +146,7 @@ class Jobs:
 
         @firestore.transactional
         def write(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             if not old or old.get("deleted"):
                 raise HTTPException(404, "Referência não encontrada")

@@ -13,6 +13,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from PIL import Image, ImageOps, UnidentifiedImageError
 
+from queep.account_state import is_closed, require_open
 from queep.models import ImageInfo, Reference
 from queep.repository import Repository, fingerprint, new_job
 
@@ -101,6 +102,7 @@ class Images:
 
         @firestore.transactional
         def begin(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             upload = manifest.get(transaction=tx).to_dict()
             if old and not old.get("uploading"):
@@ -161,6 +163,7 @@ class Images:
 
         @firestore.transactional
         def finish(tx):
+            require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict()
             upload = manifest.get(transaction=tx).to_dict()
             if old and not old.get("deleted") and old.get("create_hash") == digest:
@@ -226,6 +229,9 @@ class Images:
 
         @firestore.transactional
         def claim(tx):
+            # Account erasure owns these reservations, including the upload settling window.
+            if is_closed(self.db, uid, tx):
+                return None
             upload = manifest.get(transaction=tx).to_dict()
             if not upload or upload["state"] == "active":
                 return None

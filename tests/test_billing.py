@@ -200,6 +200,7 @@ def test_event_during_refresh_discards_old_snapshot_and_newer_lease(service):
 
 
 def test_development_bypass_is_explicit_and_forbidden_in_production(monkeypatch):
+    monkeypatch.setenv("QUEEP_ACCOUNT_DELETION_ENABLED", "false")
     monkeypatch.setenv("QUEEP_BILLING_MODE", "development")
     service = Billing(database(), Settings())
     assert service.access(str(uuid4())).mode == "development"
