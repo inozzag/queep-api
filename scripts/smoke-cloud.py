@@ -1,6 +1,7 @@
 """Exercise the deployed API with disposable Firebase users; never print tokens."""
 
 import argparse
+import hashlib
 import json
 import plistlib
 import secrets
@@ -8,29 +9,34 @@ import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
+from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
 
+from PIL import Image
 
-def request(method, url, body=None, token=None, expected=200, gateway_token=None):
-    headers = {"Content-Type": "application/json"}
+
+def request(method, url, body=None, token=None, expected=200, gateway_token=None, binary=False):
+    headers = {"Content-Type": "application/octet-stream" if isinstance(body, bytes)
+               else "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
     if gateway_token:
         headers["X-Serverless-Authorization"] = f"Bearer {gateway_token}"
     req = urllib.request.Request(
-        url, data=json.dumps(body).encode() if body is not None else None,
+        url, data=body if isinstance(body, bytes) else
+        json.dumps(body).encode() if body is not None else None,
         headers=headers, method=method,
     )
     try:
-        with urllib.request.urlopen(req, timeout=45) as response:
+        with urllib.request.urlopen(req, timeout=120) as response:
             status, data = response.status, response.read()
     except urllib.error.HTTPError as error:
         status, data = error.code, error.read()
     if status != expected:
         path = urllib.parse.urlsplit(url).path
         raise AssertionError(f"{method} {path}: {status}, expected {expected}")
-    return json.loads(data) if data else None
+    return data if binary else json.loads(data) if data else None
 
 
 def main():
@@ -51,9 +57,9 @@ def main():
             "gcloud", "auth", "print-identity-token", "--account=gazzoni@hstlx.com",
         ], text=True).strip()
 
-    def api(method, url, body=None, token=None, expected=200):
+    def api(method, url, body=None, token=None, expected=200, binary=False):
         assert url.startswith(base + "/")
-        return request(method, url, body, token, expected, gateway_token)
+        return request(method, url, body, token, expected, gateway_token, binary)
     auth_base = "https://identitytoolkit.googleapis.com/v1/accounts:"
 
     def authenticate(action, body):
@@ -98,6 +104,32 @@ def main():
         api("PUT", url, capture, token, expected=409)
         print("PASS: cloud login, two sessions, capture/retry, isolation, "
               "private rules, edit/conflict, deletion.")
+        output = BytesIO()
+        Image.new("RGB", (900, 600), "white").save(output, "PNG")
+        data = output.getvalue()
+        ref_id = str(uuid4())
+        url = f"{base}/v1/references/{ref_id}"
+        image_url = f"{url}/image?title=Cloud%20image"
+        reference = api("PUT", image_url, data, token)
+        assert api("PUT", image_url, data, second_session) == reference
+        assert reference["image"]["width"] == 900 and reference["status"] == "queued"
+        for suffix in ("", "?thumbnail=true"):
+            pixels = api("GET", f"{url}/image{suffix}", token=second_session, binary=True)
+            assert Image.open(BytesIO(pixels)).size == ((560, 373) if suffix else (900, 600))
+        api("GET", f"{url}/image", expected=401)
+        api("GET", f"{url}/image", token=users[1][0]["idToken"], expected=404)
+        key = hashlib.sha256(f"{owner['localId']}/{ref_id}".encode()).hexdigest()
+        object_name = f"images/v1/{key}/{reference['image']['sha256']}/original"
+        direct_storage = ("https://firebasestorage.googleapis.com/v0/b/"
+                          "queep-dev-hstlx.firebasestorage.app/o/"
+                          f"{urllib.parse.quote(object_name, safe='')}?alt=media")
+        request("GET", direct_storage, token=token, expected=403)
+        api("DELETE", f"{url}?revision=1", token=token, expected=204)
+        reference = None
+        api("GET", f"{url}/image", token=second_session, expected=404)
+        api("PUT", image_url, data, token, expected=409)
+        print("PASS: cloud images, immutable retry, original/thumbnail, account isolation, "
+              "private Storage, deletion and prevention of resurrection.")
     finally:
         cleanup_errors = []
         if reference is not None:

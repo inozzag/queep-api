@@ -52,6 +52,8 @@ class Repository:
             if editing:
                 if not old or old.get("deleted"):
                     raise HTTPException(404, "Referência não encontrada")
+                if old["kind"] != capture.kind:
+                    raise HTTPException(409, "O tipo da referência não pode ser alterado")
                 assert isinstance(capture, Edit)
                 mutation_id = str(capture.mutation_id)
                 if old.get("last_mutation_id") == mutation_id:
@@ -111,6 +113,7 @@ class Repository:
     def delete(self, uid, ref_id, revision):
         doc = self.collection(uid).document(ref_id)
         job = self.job(uid, ref_id)
+        upload = self.db.collection("image_uploads").document(job.id)
 
         @firestore.transactional
         def remove(tx):
@@ -123,6 +126,11 @@ class Repository:
             tx.set(doc, {"deleted": True, "revision": revision + 1,
                          "updated_at": datetime.now(UTC)})
             tx.delete(job)
+            if old.get("image"):
+                # Persist cleanup with the tombstone; Storage failures cannot lose the work.
+                from datetime import timedelta
+                tx.update(upload, {"state": "cleanup", "cleanup_after": datetime.now(UTC),
+                                   "settle_at": datetime.now(UTC) + timedelta(minutes=10)})
 
         self.transact(remove)
 

@@ -14,9 +14,9 @@ gcloud run deploy queep-api \
   --region=southamerica-east1 --source=. \
   --build-service-account=projects/queep-dev-hstlx/serviceAccounts/queep-build@queep-dev-hstlx.iam.gserviceaccount.com \
   --service-account=queep-api@queep-dev-hstlx.iam.gserviceaccount.com \
-  --set-env-vars=QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx \
-  "${access[@]}" --min=0 --max=2 --cpu=1 --memory=512Mi \
-  --concurrency=20 --timeout=30 --cpu-throttling --quiet
+  --set-env-vars=QUEEP_ENV=production,GOOGLE_CLOUD_PROJECT=queep-dev-hstlx,QUEEP_STORAGE_BUCKET=queep-dev-hstlx.firebasestorage.app \
+  "${access[@]}" --min=0 --max=2 --cpu=1 --memory=1Gi \
+  --concurrency=8 --timeout=120 --cpu-throttling --quiet
 
 # --public requires the project-level organization policy exception. It makes
 # the edge reachable by Apple apps; reference endpoints still require Firebase.

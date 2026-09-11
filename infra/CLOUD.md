@@ -10,15 +10,17 @@
 | Storage | `queep-dev-hstlx.firebasestorage.app`, São Paulo, acesso público bloqueado |
 | Auth | Email/senha; proteção contra enumeração de emails; Identity Platform |
 | API | `https://queep-api-721281571441.southamerica-east1.run.app` |
-| Cloud Run | 0–2 instâncias, 1 CPU, 512 MiB, concorrência 20, timeout 30 s |
+| Cloud Run | 0–2 instâncias, 1 CPU, 1 GiB, concorrência 8, timeout 120 s |
 
-API executa com `queep-api@queep-dev-hstlx.iam.gserviceaccount.com`: somente
-`roles/datastore.user` e `roles/firebaseauth.viewer`. Build usa identidade separada
+API executa com `queep-api@queep-dev-hstlx.iam.gserviceaccount.com`:
+`roles/datastore.user` e `roles/firebaseauth.viewer` no projeto;
+`roles/storage.objectUser` apenas no bucket do Queep. Build usa identidade separada
 `queep-build`, com `roles/run.builder`. Nenhuma chave de service account foi criada.
 
 Regras publicadas negam acesso direto dos clientes a Firestore/Storage. Referências
 passam pela API, que verifica o token Firebase, revogação e proprietário.
-Storage está provisionado, mas upload de mídia ainda não foi implementado.
+Imagens e miniaturas passam pela API autenticada. O bucket mantém soft delete de
+7 dias; a exclusão remove imediatamente o acesso pelo app.
 Escala mínima zero reduz ociosidade; máximo de instâncias não é teto de gastos.
 
 ## Acesso dos apps
@@ -61,3 +63,22 @@ leitura direta, edição/conflitos e exclusão). Também validado pela interface
 nota criada no Mac → aberta e editada no iPhone 17 simulado → alteração recuperada
 no Mac; revisão 2 conferida pela API. Sessões encerradas; contas temporárias e conteúdo
 removidos. Base local: 19 testes da API, 2 Swift e 1 teste de interface iOS aprovados.
+
+## Imagens — entrega de 10/09/2026
+
+Revisão `queep-api-00003-c7p`: smoke de notas e imagens aprovado na nuvem com
+Firebase (sem identidade IAM de desenvolvedor). 30 testes da API aprovados localmente.
+Teste nativo: PNG escolhido em Fotos no iPhone → aberto/ampliado/excluído no Mac;
+HEIC escolhido no Mac → aberto/excluído no iPhone. Exclusões chegaram ao outro app.
+Os arquivos sintéticos foram removidos; a imagem adicionada manualmente foi preservada.
+
+A limpeza usa o job privado `queep-image-cleanup`, mesma imagem da API, 1 tarefa,
+512 MiB e timeout de 300 s. Cloud Scheduler dispara a cada 30 minutos. A identidade
+`queep-image-scheduler` tem `roles/run.invoker` somente nesse job. A execução
+`queep-image-cleanup-zp5g6`, disparada pelo Scheduler, concluiu com sucesso.
+
+Após atualizar a API, rode `bash infra/deploy-image-cleanup-dev.sh` para atualizar
+job/agendamento com o digest da revisão publicada. O script pressupõe a API
+`cloudscheduler.googleapis.com` habilitada e a identidade `queep-image-scheduler`
+existente. O job usa a identidade de execução da API e não possui endpoint público.
+Detalhes de recuperação: [IMAGES.md](IMAGES.md).

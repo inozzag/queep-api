@@ -6,6 +6,6 @@ dev:
 emulators:
 	firebase emulators:start --project demo-queep
 test:
-	firebase emulators:exec --only auth,firestore --project demo-queep 'uv run --env-file .env.example pytest -q'
+	firebase emulators:exec --only auth,firestore,storage --project demo-queep 'uv run --env-file .env.example pytest -q'
 lint:
 	uv run ruff check .

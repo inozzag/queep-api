@@ -47,9 +47,17 @@ class Interpretation(BaseModel):
         return value
 
 
+class ImageInfo(BaseModel):
+    sha256: str
+    content_type: Literal["image/jpeg", "image/png"]
+    width: int
+    height: int
+    byte_count: int
+
+
 class Reference(BaseModel):
     id: str
-    kind: Literal["note", "link"]
+    kind: Literal["note", "link", "image"]
     title: str
     text: str
     url: str | None
@@ -58,6 +66,7 @@ class Reference(BaseModel):
     created_at: datetime
     updated_at: datetime
     analysis: Interpretation | None = None
+    image: ImageInfo | None = None
 
 
 class Library(BaseModel):
