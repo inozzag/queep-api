@@ -46,16 +46,27 @@ Nenhum projeto RevenueCat anterior foi alterado.
    definir `QUEEP_BILLING_MODE=required`, `QUEEP_BILLING_ACCEPT_SANDBOX=true`.
    Configurar no RevenueCat a URL da API acima + `/v1/billing/webhook`, com o
    header Bearer exclusivo. Não usar OpenRouter nem chave pública como token.
-4. Testes externos restantes: entrega do webhook pelo RevenueCat, expiração/reembolso
+4. Testes externos restantes: eventos de ciclo de vida da assinatura, expiração/reembolso
    e política de restauração/troca de conta. Estados simulados já têm testes de contrato.
 
-Webhook cloud preparado em `queep-api-00012-dx2`: segredo `queep-revenuecat-webhook:1`
+Webhook cloud validado em `queep-api-00012-dx2`: segredo `queep-revenuecat-webhook:1`
 vinculado exclusivamente à identidade da API. URL:
 `https://queep-api-721281571441.southamerica-east1.run.app/v1/billing/webhook`.
-Sem header retorna 401; evento TEST autenticado retorna 200. O formulário RevenueCat
-está preenchido para **Sandbox / Test Store / All events**, aguardando o usuário colar
-o header e salvar. `python3 scripts/copy-revenuecat-webhook.py` copia o header sem
-imprimi-lo. **Recebimento direto do RevenueCat ainda não foi comprovado.**
+Integração `whintgrdb1ada9154` salva para **Sandbox / Test Store / All events**.
+Em 11/09/2026, às 19:50 UTC, o evento TEST
+`7A2ADFB1-43C0-429F-9752-9A690E4D8D94` enviado diretamente pelo painel RevenueCat
+recebeu **200 / {"received":true}**. Cloud Run e Firestore confirmaram a entrega,
+o recibo com TTL de 30 dias e a invalidação dos dois aliases sintéticos.
+
+Repetição autenticada do mesmo ID pela API retornou 200 sem modificar recibo,
+geração ou data de invalidação; sem autenticação retornou 401. O botão “Resend Test
+Event” do painel gera outro ID: essa segunda entrega também recebeu 200, mas não é
+a evidência de deduplicação. Relatório local: `/tmp/queep-rc-webhook-verification.json`.
+O teste confirma conexão, autenticação e processamento de TEST; eventos reais de
+renovação, expiração e reembolso ainda precisam de validação externa.
+
+Para configuração futura, `python3 scripts/copy-revenuecat-webhook.py` copia o header
+sem imprimi-lo. Nenhuma alteração de código ou nova implantação foi necessária.
 
 O ambiente `queep-dev-hstlx` permanece com `QUEEP_BILLING_MODE=development`:
 sem cobrança e sem exigência de assinatura. Scripts `deploy-*-dev.sh` explicitam
