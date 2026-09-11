@@ -8,7 +8,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from google.cloud.firestore_v1.vector import Vector
 
-from queep.account_state import is_closed, require_open
+from queep.account_state import account_version, is_closed, require_open
 from queep.ai import ANALYSIS_VERSION, INTERPRETER, SPACE
 from queep.models import Reference
 from queep.repository import Repository, new_job
@@ -30,7 +30,6 @@ class Jobs:
             old = doc.get(transaction=tx).to_dict()
             if old and "run_id" not in old:
                 if is_closed(self.db, old["uid"], tx):
-                    tx.delete(doc)
                     return
                 tx.set(doc, new_job(old["uid"], old["reference_id"], old["revision"],
                                     datetime.now(UTC)))
@@ -42,8 +41,31 @@ class Jobs:
         for doc in pending.limit(100).stream():
             if "run_id" not in doc.to_dict():
                 self.bootstrap(doc.id)
-        return list(collection.where(filter=FieldFilter("dispatch_after", "<=", datetime.now(UTC)))
-                    .order_by("dispatch_after").limit(50).stream())
+        candidates = list(collection.where(
+            filter=FieldFilter("dispatch_after", "<=", datetime.now(UTC)))
+            .order_by("dispatch_after").limit(50).stream())
+        ready = []
+        for doc in candidates:
+            if is_closed(self.db, doc.to_dict()["uid"]):
+                self.pause(doc.id)
+            else:
+                ready.append(doc)
+        return ready
+
+    def pause(self, job_id):
+        doc = self.db.collection("jobs").document(job_id)
+
+        @firestore.transactional
+        def write(tx):
+            job = doc.get(transaction=tx).to_dict()
+            if job and is_closed(self.db, job["uid"], tx):
+                tx.update(doc, {"state": "pending", "run_id": uuid4().hex,
+                                "attempts": max(0, job["attempts"] -
+                                                int(job["state"] == "processing")),
+                                "token": firestore.DELETE_FIELD,
+                                "lease_until": firestore.DELETE_FIELD,
+                                "dispatch_after": datetime.now(UTC) + timedelta(minutes=5)})
+        self.repo.transact(write)
 
     def payload(self, doc):
         job = doc.to_dict()
@@ -76,8 +98,14 @@ class Jobs:
             if not self.matches(job, task) or job["state"] == "failed":
                 return None
             if is_closed(self.db, job["uid"], tx):
-                tx.delete(doc)
                 return None
+            version = account_version(self.db, job["uid"], tx)
+            expected_attempt = task["attempt"]
+            if job["state"] == "processing" and job.get("account_version", 0) != version:
+                if expected_attempt == job["attempts"]:
+                    expected_attempt = max(0, expected_attempt - 1)
+                job = {**job, "attempts": max(0, job["attempts"] - 1)}
+                job.pop("lease_until", None)
             reference = self.repo.collection(job["uid"]).document(job["reference_id"])
             record = reference.get(transaction=tx).to_dict()
             if not record or record.get("deleted") or record["revision"] != task["revision"]:
@@ -89,18 +117,21 @@ class Jobs:
                 tx.update(doc, {"state": "failed", "dispatch_after": firestore.DELETE_FIELD})
                 tx.update(reference, {"status": "error", "updated_at": now})
                 return None
-            if job["attempts"] != task["attempt"] or job.get("lease_until", now) > now:
+            if job["attempts"] != expected_attempt or job.get("lease_until", now) > now:
                 return None
             lease = now + timedelta(seconds=self.LEASE_SECONDS)
-            tx.update(doc, {"state": "processing", "token": token, "lease_until": lease,
+            tx.update(doc, {"state": "processing", "account_version": version,
+                            "token": token, "lease_until": lease,
                             "dispatch_after": lease, "attempts": job["attempts"] + 1})
             tx.update(reference, {"status": "processing", "updated_at": now})
-            return {**job, "job_id": doc.id, "token": token, "attempts": job["attempts"] + 1,
+            return {**job, "job_id": doc.id, "account_version": version,
+                    "token": token, "attempts": job["attempts"] + 1,
                     "reference": Reference.model_validate(record)}
         return self.repo.transact(write)
 
     def current(self, work):
-        if is_closed(self.db, work["uid"]):
+        if (is_closed(self.db, work["uid"])
+                or account_version(self.db, work["uid"]) != work.get("account_version", 0)):
             return False
         job = self.db.collection("jobs").document(work["job_id"]).get().to_dict()
         return bool(self.matches(job, work) and job.get("token") == work["token"]
@@ -113,7 +144,8 @@ class Jobs:
 
         @firestore.transactional
         def write(tx):
-            if is_closed(self.db, work["uid"], tx):
+            if (is_closed(self.db, work["uid"], tx)
+                    or account_version(self.db, work["uid"], tx) != work.get("account_version", 0)):
                 return False
             job = doc.get(transaction=tx).to_dict()
             record = ref.get(transaction=tx).to_dict()

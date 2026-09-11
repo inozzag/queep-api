@@ -32,10 +32,6 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_emulators(self):
-        if self.environment == "production" and self.account_deletion_enabled and (
-            not self.revenuecat_project_id or not self.revenuecat_delete_key
-        ):
-            raise ValueError("Cloud account erasure requires configured RevenueCat cleanup")
         if (self.billing_mode == "development" or self.billing_accept_sandbox) and not (
             self.environment == "local" or self.project == "queep-dev-hstlx"
         ):

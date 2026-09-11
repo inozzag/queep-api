@@ -33,20 +33,22 @@ def png():
 
 def complete(service, uid):
     assert service.process(uid, datetime.now(UTC) + timedelta(minutes=11))
-    assert set(deletion_document(database(), uid).get().to_dict()) == {"state", "completed_at"}
+    assert set(deletion_document(database(), uid).get().to_dict()) == {
+        "state", "completed_at", "version", "operation_id"}
 
 
 def test_delete_requires_identity_and_recent_authentication(client, account, monkeypatch):
     uid, headers = account
-    assert client.post("/v1/account/deletion").status_code == 401
+    change = {"operation_id": str(uuid4()), "version": 0, "immediate": True}
+    assert client.post("/v1/account/deletion", json=change).status_code == 401
     assert client.post("/v1/account/deletion",
-                       headers={"Authorization": "Bearer fake"}).status_code == 401
+                       headers={"Authorization": "Bearer fake"}, json=change).status_code == 401
     verify = auth.verify_id_token
 
     def old(*args, **kwargs):
         return {**verify(*args, **kwargs), "auth_time": int(datetime.now(UTC).timestamp()) - 601}
     monkeypatch.setattr(auth, "verify_id_token", old)
-    assert client.post("/v1/account/deletion", headers=headers).status_code == 403
+    assert client.post("/v1/account/deletion", headers=headers, json=change).status_code == 403
     assert not deletion_document(database(), uid).get().exists
     assert auth.get_user(uid, app=firebase_app())
 
@@ -58,13 +60,14 @@ def test_request_is_free_idempotent_and_scoped_to_verified_user(client, account,
     repo.save(uid, ref_id, Capture(kind="note", text="Private deletion fixture"))
     unrelated = "untouched-" + uuid4().hex
     repo.save(unrelated, ref_id, Capture(kind="note", text="Other account"))
-    result = client.post("/v1/account/deletion", headers=headers, json={"uid": unrelated})
-    assert result.status_code == 202 and result.json() == {"status": "deleting"}
+    change = {"operation_id": str(uuid4()), "version": 0, "immediate": True, "uid": unrelated}
+    result = client.post("/v1/account/deletion", headers=headers, json=change)
+    assert result.status_code == 202 and result.json()["status"] == "deleting"
     with pytest.raises(auth.UserNotFoundError):
         auth.get_user(uid, app=firebase_app())
     for path in ["/v1/references", "/v1/billing/access", f"/v1/references/{ref_id}"]:
         assert client.get(path, headers=headers).status_code == 401
-    assert client.post("/v1/account/deletion", headers=headers).status_code == 202
+    assert client.post("/v1/account/deletion", headers=headers, json=change).status_code == 202
     assert repo.get(unrelated, ref_id).text == "Other account"
     assert not repo.collection(uid).document(ref_id).get().exists
     assert not repo.job(uid, ref_id).get().exists
@@ -79,7 +82,7 @@ def test_barrier_blocks_inflight_writes_workers_and_billing(account, service):
     ref = repo.save(uid, str(uuid4()), Capture(kind="note", text="Pending analysis"))
     task = jobs.payload(repo.job(uid, ref.id).get())
     work = jobs.claim(task)
-    service.request(uid)
+    service.request(uid, immediate=True)
     for operation in [
         lambda: repo.save(uid, str(uuid4()), Capture(kind="note", text="Late")),
         lambda: jobs.retry(uid, ref.id, 1),
@@ -104,14 +107,14 @@ def test_image_and_usage_removal_survive_storage_failure(account, service, monke
     ref = images.upload(uid, str(uuid4()), "Private image", png())
     path = images.prefix(uid, ref.id, ref.image.sha256)
     Budget(database(), 1).rate_limit(uid)
-    service.request(uid)
+    service.request(uid, immediate=True)
     real_blob = service.bucket.blob
 
     def failure(*args, **kwargs):
         raise ServiceUnavailable("injected")
     monkeypatch.setattr(service.bucket, "blob", failure)
     assert not service.resume(uid)
-    assert deletion_document(database(), uid).get().to_dict()["state"] == "pending"
+    assert deletion_document(database(), uid).get().to_dict()["state"] == "deleting"
     assert images.manifest(uid, ref.id).get().exists
     monkeypatch.setattr(service.bucket, "blob", real_blob)
     complete(service, uid)
@@ -132,7 +135,7 @@ def test_upload_finishing_after_request_cannot_recreate_content(account, service
         put(path, data, content_type)
         if not started:
             started = True
-            service.request(uid)
+            service.request(uid, immediate=True)
             assert not service.process(uid)
     monkeypatch.setattr(images, "put_object", racing)
     with pytest.raises(HTTPException) as error:
@@ -148,7 +151,7 @@ def test_upload_finishing_after_request_cannot_recreate_content(account, service
 def test_late_webhook_skips_erased_account_and_preserves_other_alias(account, service):
     uid = account[0]
     other = "alias-" + uuid4().hex
-    service.request(uid)
+    service.request(uid, immediate=True)
     complete(service, uid)
     billing = Billing(database(), Settings())
     event = Event(id=uuid4().hex, type="RENEWAL", app_user_id=uid, aliases=[other])
@@ -170,23 +173,26 @@ def test_revenuecat_erasure_waits_for_absence_and_uses_verified_identity(account
         seen.append(request)
         return httpx.Response(status if len(seen) <= 2 else 404, json={})
     service.transport = httpx.MockTransport(respond)
-    service.request(uid)
+    service.request(uid, immediate=True)
+    record = deletion_document(database(), uid).get().to_dict()
+    assert service.erase_customer(uid, record) == (status == 404)
     if status == 200:
-        assert not service.process(uid, datetime.now(UTC) + timedelta(minutes=11))
-        assert deletion_document(database(), uid).get().to_dict()["state"] == "pending"
         assert seen[1].method == "DELETE"
+        assert service.erase_customer(uid, record)
     complete(service, uid)
     assert seen[0].method == "GET"
     assert seen[0].url.path == f"/v2/projects/only-this-project/customers/{uid}"
     assert seen[0].headers["Authorization"] == "Bearer server-only"
 
 
-def test_missing_vendor_key_keeps_deletion_pending_after_local_data_erased(account, service):
+def test_missing_vendor_key_does_not_block_queep_erasure(account, service):
     uid = account[0]
     service.settings.revenuecat_project_id = "configured-project"
-    service.request(uid)
-    assert not service.resume(uid, datetime.now(UTC) + timedelta(minutes=11))
-    assert deletion_document(database(), uid).get().to_dict()["state"] == "pending"
+    service.request(uid, immediate=True)
+    complete(service, uid)
+    pending = database().collection("provider_deletions").document(
+        deletion_document(database(), uid).id)
+    assert pending.get().to_dict()["uid"] == uid
     with pytest.raises(auth.UserNotFoundError):
         auth.get_user(uid, app=firebase_app())
 
@@ -194,9 +200,9 @@ def test_missing_vendor_key_keeps_deletion_pending_after_local_data_erased(accou
 def test_repeated_request_does_not_extend_settling_window(account, service):
     uid = account[0]
     now = datetime.now(UTC)
-    service.request(uid, now)
+    service.request(uid, now, immediate=True, operation_id="repeat")
     before = deletion_document(database(), uid).get().to_dict()
-    service.request(uid, now + timedelta(hours=1))
+    service.request(uid, now + timedelta(hours=1), immediate=True, operation_id="repeat")
     assert deletion_document(database(), uid).get().to_dict() == before
     complete(service, uid)
 
@@ -204,14 +210,17 @@ def test_repeated_request_does_not_extend_settling_window(account, service):
 def test_cloud_rollout_gate_does_not_accept_new_deletions(client, account, monkeypatch):
     monkeypatch.setenv("QUEEP_ACCOUNT_DELETION_ENABLED", "false")
     uid, headers = account
-    assert client.post("/v1/account/deletion", headers=headers).status_code == 503
+    assert client.post("/v1/account/deletion", headers=headers,
+                       json={"operation_id": str(uuid4()), "version": 0}).status_code == 503
     assert not deletion_document(database(), uid).get().exists
 
 
 def test_provider_requirement_cannot_disappear_with_runtime_config(account, service):
     uid = account[0]
     service.settings.revenuecat_project_id = "original-project"
-    service.request(uid)
+    service.request(uid, immediate=True)
     service.settings.revenuecat_project_id = ""
-    assert not service.resume(uid, datetime.now(UTC) + timedelta(minutes=11))
-    assert deletion_document(database(), uid).get().to_dict()["state"] == "pending"
+    complete(service, uid)
+    pending = database().collection("provider_deletions").document(
+        deletion_document(database(), uid).id)
+    assert pending.get().to_dict()["provider_project"] == "original-project"

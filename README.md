@@ -33,14 +33,14 @@ Os testes usam Auth, Firestore e Storage emulados, incluindo concorrência, isol
 - `DELETE /v1/references/{UUID}?revision=N`: exclui conteúdo e trabalho pendente; mantém só tombstone contra reenvios tardios.
 - `POST /v1/search`: `{ "query": "interfaces claras de CRM" }`; até 10 candidatos, conferidos por IA, sem inventar resultados fora do acervo.
 - `POST /v1/references/{UUID}/retry`: `{ "revision": N }`; nova tentativa para análise em erro.
-- `GET /v1/account`: verifica se a sessão continua ativa.
-- `POST /v1/account/deletion`: autenticação recente; solicita exclusão assíncrona com bloqueio imediato. [Contrato, ativação e limites](infra/ACCOUNTS.md).
+- `GET /v1/account`: estado, versão e prazo de exclusão da conta autenticada.
+- `POST /v1/account/deletion`: autenticação recente, operação/versão; agenda exclusão em 30 dias ou inicia imediatamente. `POST /v1/account/deletion/cancel` recupera antes do prazo. [Contrato, ativação e limites](infra/ACCOUNTS.md).
 
 Conteúdo e job são gravados na mesma transação. O worker privado interpreta notas/imagens e grava o vetor da revisão atual; entregas duplicadas ou antigas não republicam conteúdo. Links públicos/READMEs são extraídos quando acessíveis; cobertura parcial é sinalizada. Regras de mídia em [infra/IMAGES.md](infra/IMAGES.md) e operação de IA em [infra/AI.md](infra/AI.md).
 
 ## Próxima entrega
 
-Leitura de páginas públicas/READMEs implementada; cobertura e limites em [SOURCES.md](infra/SOURCES.md). Próximos passos: fontes sociais/vídeos e avaliação em acervos maiores. A [comparação de modelos](evaluation/README.md) usa dados sintéticos e orçamento limitado. Antes de produção: cotas por plano, App Check/abuso, conclusão da ativação de exclusão de conta, retenção e integração Apple IAP. O teto de desenvolvimento não substitui os limites comerciais.
+Leitura de páginas públicas/READMEs implementada; cobertura e limites em [SOURCES.md](infra/SOURCES.md). Próximos passos: fontes sociais/vídeos e avaliação em acervos maiores. A [comparação de modelos](evaluation/README.md) usa dados sintéticos e orçamento limitado. Antes de produção: cotas por plano, App Check/abuso, limpeza de fornecedores após exclusão, retenção e integração Apple IAP. O teto de desenvolvimento não substitui os limites comerciais.
 
 O ambiente cloud de desenvolvimento está acessível aos apps, com autenticação Firebase
 e sincronização Mac/iPhone verificadas. Estado e comandos em

@@ -5,8 +5,10 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 from urllib.parse import quote
+from uuid import uuid4
 
 import httpx
+from fastapi import HTTPException
 from firebase_admin import auth
 from google.api_core.exceptions import NotFound
 from google.cloud import firestore
@@ -27,22 +29,87 @@ class Accounts:
         self.repo = Repository(db)
         self.transport = transport
 
-    def request(self, uid, now=None):
+    GRACE_DAYS = 30
+
+    @staticmethod
+    def status(record, now=None):
+        now = now or datetime.now(UTC)
+        record = record or {}
+        state = record.get("state", "active")
+        if state == "pending":  # Older, irreversible requests.
+            state = "deleting"
+        deadline = record.get("delete_at")
+        return {"status": state, "version": record.get("version", 0),
+                "delete_at": deadline,
+                "can_restore": state == "scheduled" and deadline is not None and now < deadline}
+
+    def get_status(self, uid, now=None):
+        return self.status(deletion_document(self.db, uid).get().to_dict(), now)
+
+    def request(self, uid, now=None, *, immediate=False, version=0, operation_id=None):
+        now = now or datetime.now(UTC)
+        operation_id = operation_id or uuid4().hex
+        doc = deletion_document(self.db, uid)
+
+        @firestore.transactional
+        def write(tx):
+            current = doc.get(transaction=tx).to_dict() or {}
+            if current.get("operation_id") == operation_id:
+                return self.status(current, now)
+            if current.get("version", 0) != version:
+                raise HTTPException(409, "O estado da conta mudou. Atualize e tente novamente.")
+            state = current.get("state", "active")
+            if state not in ("active", "scheduled"):
+                raise HTTPException(409, "A exclusão definitiva já foi iniciada.")
+            if state == "scheduled" and (not immediate or now >= current["delete_at"]):
+                raise HTTPException(409, "A conta já tem uma exclusão agendada.")
+            deadline = now if immediate else now + timedelta(days=self.GRACE_DAYS)
+            record = {"uid": uid, "state": "deleting" if immediate else "scheduled",
+                      "version": version + 1, "operation_id": operation_id,
+                      "requested_at": now, "delete_at": deadline, "retry_after": deadline,
+                      "provider_project": self.settings.revenuecat_project_id,
+                      "provider_required": bool(self.settings.revenuecat_project_id
+                                                or self.settings.revenuecat_key
+                                                or self.settings.billing_mode == "required"),
+                      "settle_at": now + timedelta(seconds=self.SETTLE_SECONDS)}
+            tx.set(doc, record)
+            return self.status(record, now)
+        return self.repo.transact(write)
+
+    def cancel(self, uid, version, operation_id, now=None):
         now = now or datetime.now(UTC)
         doc = deletion_document(self.db, uid)
 
         @firestore.transactional
         def write(tx):
-            if doc.get(transaction=tx).exists:
-                return
-            tx.create(doc, {"uid": uid, "state": "pending", "requested_at": now,
-                            "retry_after": now,
-                            "provider_project": self.settings.revenuecat_project_id,
-                            "provider_required": bool(self.settings.revenuecat_project_id
-                                                      or self.settings.revenuecat_key
-                                                      or self.settings.billing_mode == "required"),
-                            "settle_at": now + timedelta(seconds=self.SETTLE_SECONDS)})
-        self.repo.transact(write)
+            current = doc.get(transaction=tx).to_dict() or {}
+            if current.get("operation_id") == operation_id:
+                return self.status(current, now)
+            if (current.get("version", 0) != version or current.get("state") != "scheduled"
+                    or now >= current["delete_at"]):
+                raise HTTPException(409, "O prazo de recuperação terminou ou a conta mudou.")
+            active = {"state": "active", "version": version + 1,
+                      "operation_id": operation_id, "restored_at": now}
+            # Keep a version after restoration: delayed requests/work cannot reuse old intent.
+            tx.set(doc, active)
+            return self.status(active, now)
+        return self.repo.transact(write)
+
+    def claim(self, uid, now):
+        doc = deletion_document(self.db, uid)
+
+        @firestore.transactional
+        def write(tx):
+            current = doc.get(transaction=tx).to_dict()
+            if not current or current["state"] in ("active", "deleted"):
+                return None
+            if current["state"] == "scheduled":
+                if now < current["delete_at"]:
+                    return None
+                current.update(state="deleting", version=current.get("version", 0) + 1)
+                tx.update(doc, {"state": current["state"], "version": current["version"]})
+            return current
+        return self.repo.transact(write)
 
     def erase_customer(self, uid, request):
         if not request.get("provider_required", True):
@@ -80,9 +147,9 @@ class Accounts:
     def process(self, uid, now=None):
         now = now or datetime.now(UTC)
         doc = deletion_document(self.db, uid)
-        request = doc.get().to_dict()
-        if not request or request["state"] == "deleted":
-            return True
+        request = self.claim(uid, now)
+        if not request:
+            return self.get_status(uid, now)["status"] in ("active", "deleted")
         try:
             auth.delete_user(uid, app=firebase_app())
         except auth.UserNotFoundError:
@@ -116,16 +183,18 @@ class Accounts:
         if more or now < request["settle_at"]:
             self.defer(uid, now)
             return False
-        # Done only after the external processor confirms; failures retain the work.
-        if not self.erase_customer(uid, request):
-            self.defer(uid, now)
-            return False
-
         @firestore.transactional
         def finish(tx):
             current = doc.get(transaction=tx).to_dict()
-            if current and current["state"] == "pending":
-                tx.set(doc, {"state": "deleted", "completed_at": now})
+            if current and current["state"] in ("pending", "deleting"):
+                if current.get("provider_required", True):
+                    # Vendor cleanup is independent and explicitly deferred for this release.
+                    provider = self.db.collection("provider_deletions").document(doc.id)
+                    tx.set(provider, {"uid": uid, "state": "pending", "requested_at": now,
+                                      "provider_project": current.get("provider_project", "")})
+                tx.set(doc, {"state": "deleted", "completed_at": now,
+                             "version": current.get("version", 0),
+                             "operation_id": current.get("operation_id")})
         self.repo.transact(finish)
         return True
 
@@ -135,7 +204,7 @@ class Accounts:
         @firestore.transactional
         def write(tx):
             current = doc.get(transaction=tx).to_dict()
-            if current and current["state"] == "pending":
+            if current and current["state"] in ("pending", "deleting"):
                 tx.update(doc, {"retry_after": now + timedelta(minutes=5)})
         self.repo.transact(write)
 

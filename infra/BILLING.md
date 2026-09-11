@@ -139,3 +139,9 @@ Referências: [SDK Apple](https://www.revenuecat.com/docs/getting-started/instal
 [identidade](https://www.revenuecat.com/docs/customers/identifying-customers),
 [webhooks](https://www.revenuecat.com/docs/integrations/webhooks),
 [API V1](https://www.revenuecat.com/docs/api-v1/customers).
+
+## Decisão atual sobre exclusão
+
+A limpeza de customers RevenueCat foi adiada pelo usuário. Exclusão/recuperação do
+Queep funciona de forma independente; pedidos do fornecedor ficam em fila separada.
+Não configurar nova chave ou App Store Connect nesta etapa. [Política](ACCOUNTS.md).

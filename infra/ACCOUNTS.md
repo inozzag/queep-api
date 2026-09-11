@@ -1,79 +1,86 @@
-# Exclusão de conta
+# Exclusão e recuperação de conta
 
-Mac/iPhone: **Conta → Excluir conta**, confirmação de senha e aviso de ação
-irreversível. Cancelar ou errar a senha preserva a conta. Excluir não exige
-assinatura ativa e não cancela a assinatura Apple; a tela oferece o link de gestão.
+Política aprovada e ativa no ambiente de desenvolvimento: **30 dias para recuperar
+uma conta**, com opção de iniciar a exclusão definitiva imediatamente.
 
-## Comportamento
+## Experiência
 
-- `POST /v1/account/deletion` exige token Firebase válido e autenticação nos últimos
-  cinco minutos. Usa somente o UID verificado; o cliente não escolhe outra conta.
-- `202 / {"status":"deleting"}` confirma o pedido persistido. O acesso pela API é
-  bloqueado imediatamente, inclusive para outras sessões, uploads e trabalhos de IA.
-- A limpeza remove usuário Auth, referências/análises/vetores, jobs, uso por conta,
-  imagens/miniaturas e cache de assinatura. Um job privado retoma falhas a cada cinco
-  minutos, em lotes limitados, mesmo se o app fechar ou a API reiniciar.
-- Reservas de imagens permanecem dez minutos para recolher gravações já iniciadas.
-  Depois, a API RevenueCat V2 exclui o customer. DELETE 200 é apenas aceitação;
-  somente GET 404 confirma conclusão. Falhas mantêm o trabalho pendente.
-- Reenvios são idempotentes; eventos atrasados não recriam acesso ou conteúdo.
-  O registro final retém só hash do UID, estado e data, para impedir recriação por
-  trabalhos antigos. O UID legível sai desse registro ao concluir.
-- Nos apps ativos, respostas 401 encerram a sessão e limpam biblioteca/detalhes,
-  inclusive com uma tela aberta. Aparelhos sem conexão verificam ao voltar a usar.
+- **Conta → Excluir conta:** confirma a senha. Por padrão, agenda a exclusão para
+  30 dias depois e bloqueia biblioteca, capturas, busca e novos processamentos.
+- Login e arquivos permanecem durante esse prazo. Ao entrar novamente, a pessoa
+  vê a data exata e **Cancelar exclusão e recuperar conta**. Entrar não cancela nada.
+- Recuperar exige senha; notas, imagens, links e análises voltam à mesma conta.
+  Trabalho de IA pendente retoma pela fila. Pedidos antigos não reagendam a exclusão.
+- **Excluir definitivamente agora** dispensa a recuperação. A limpeza começa em
+  segundo plano. A conta e seus conteúdos não podem ser recuperados pelo app.
+- Vencidos os 30 dias, a limpeza automática começa pelo job privado, a cada cinco
+  minutos. Cancelamento e início da limpeza disputam a mesma transação; uma conta
+  recuperada não pode ser apagada por um job atrasado.
+- A assinatura Apple é gerenciada separadamente, com aviso e link nas duas telas.
 
-## Retenção a declarar antes do beta
+## Contrato e proteção
 
-Em `queep-dev-hstlx`, o Storage tem soft delete de **sete dias**, conferido em
-11/09/2026. Arquivos deixam de ser servidos, mas permanecem recuperáveis pela
-infraestrutura durante esse prazo. A política do bucket não foi alterada.
-Recibos técnicos de cobrança/IA expiram por TTL de 30 dias, sem conteúdo pessoal;
-o hash de bloqueio da conta permanece. Privacidade final também precisa descrever
-retenção dos provedores de IA, logs e obrigações da loja. Não prometer eliminação
-física instantânea de todas as cópias nem cancelamento de cobrança pela exclusão.
+| API | Comportamento |
+| --- | --- |
+| `GET /v1/account` | Estado, versão, data de exclusão e possibilidade de recuperar; acessível à sessão autenticada suspensa. |
+| `POST /v1/account/deletion` | `{operation_id: UUID, version: N, immediate: false}`; agendamento por padrão. `immediate: true` inicia exclusão definitiva. |
+| `POST /v1/account/deletion/cancel` | `{operation_id: UUID, version: N}`; recuperação explícita antes do prazo. |
 
-## Ativação cloud
+Mutações exigem autenticação nos últimos cinco minutos. UID vem exclusivamente do
+Firebase. Versão e identificador tornam reenvios idempotentes e rejeitam intenções
+antigas. Estados: `active → scheduled → deleting → deleted`; recuperação só de
+`scheduled` antes do prazo. Pedidos antigos `pending` continuam irreversíveis.
 
-Código implantado na API `queep-api-00014-q42` e worker `queep-worker-00005-dn8`;
-job `queep-image-cleanup` atualizado e agendado a cada cinco minutos.
-Execução manual `queep-image-cleanup-9bhmx` concluída com sucesso.
-**Novos pedidos cloud ainda desativados**, aguardando a credencial de exclusão do
-RevenueCat e o teste real do ciclo completo. As operações existentes continuam liberadas.
+API e worker verificam a barreira em transações. Workers também conferem a versão
+da conta, impedindo publicação de uma execução anterior à suspensão/recuperação.
+Os apps limpam a biblioteca suspensa e consultam o estado mesmo com um detalhe aberto.
 
-1. Projeto RevenueCat Queep: ID de painel `f6e36522`; ID REST V2 **`projf6e36522`**.
-   Criar secret V2 somente com Customers Read & Write e executar
-   `python3 scripts/configure-revenuecat-deletion.py`. Chave em `.env.accounts`, 0600,
-   ignorada por Git/Docker/build; nunca vai para o Swift.
-2. Após atualizar API/worker, executar
-   `uv run python infra/enable-account-deletion-dev.py`. O script valida leitura,
-   criação e exclusão de um customer sintético, exige GET 404, configura Secret
-   Manager, atualiza/testa manutenção e só então habilita o endpoint.
-3. Validar na nuvem com conta descartável: nota/imagem, duas sessões, pedido 202,
-   bloqueio 401, outra conta intacta e limpeza final de Auth/Firestore/Storage/RevenueCat.
-   Aguardar o processamento; não reduzir a janela de dez minutos em produção.
+A limpeza remove Auth, referências/análises/vetores, jobs, uso, imagens/miniaturas e
+cache de assinatura. Lotes limitados e pedidos persistidos permitem retomar falhas.
+Reservas ficam pelo menos dez minutos após o pedido para recolher uploads em curso;
+esse prazo já passou quando uma exclusão agendada vence normalmente.
 
-Permissão Google adicional: papel `queepAccountDeletion`, somente
-`firebaseauth.users.delete`, vinculado à identidade `queep-api`. Essa identidade
-também executa manutenção. O segredo de exclusão não é concedido ao worker de IA.
-`QUEEP_ACCOUNT_DELETION_ENABLED=true` em cloud exige projeto/segredo RevenueCat;
-sem essa configuração a aplicação recusa habilitar o fluxo.
+## RevenueCat e retenção
 
-## Verificação desta entrega
+**RevenueCat adiado por decisão do usuário.** A exclusão do Queep funciona sem a
+chave administrativa. Ao concluir, o trabalho do fornecedor fica separado em
+`provider_deletions`, com UID e projeto para futura limpeza; nenhuma chamada de
+exclusão RevenueCat ocorre nesta versão. O helper de configuração permanece para
+uso futuro. Não apresentar isso como eliminação já concluída em todos os fornecedores.
 
-137 testes de backend aprovados: autorização recente, outra conta, barreira de
-escrita, worker/reenvio atrasado, falha de Storage/provedor, retomada e apagamento
-assíncrono. Três testes do núcleo Swift aprovados. Testes de interface com contas
-descartáveis emuladas: iPhone cancelar/senha errada/excluir, Mac encerrar uma sessão
-com a tela de exclusão aberta após pedido por outra sessão.
+O registro final do Queep retém hash do UID, versão/ID da operação, estado e data,
+sem conteúdos, para impedir recriação por trabalho antigo. O registro de recuperação
+retém versão/ID/data. Recibos técnicos sem conteúdo expiram por TTL de 30 dias.
 
-Builds finais CloudDevelopment do Mac/iPhone aprovados, incluindo Share Extension.
-Regressão cloud de login, notas, imagens, sessões e isolamento aprovada; a conta
-existente e suas quatro referências foram conferidas e preservadas. O teste
-com a API real RevenueCat e a exclusão cloud completa ainda estão pendentes.
-Evidências locais: `/tmp/queep-account-all-tests.log`,
-`/tmp/queep-account-ios-final.log`, `/tmp/queep-account-mac-test.log` e
-`/tmp/queep-account-cloud-regression.log`.
+O Storage de desenvolvimento mantém **soft delete por sete dias após a remoção**.
+Esse prazo de infraestrutura é separado dos 30 dias de recuperação no app; a
+política do bucket não foi alterada. Privacidade final, confirmação da conclusão,
+retenção de fornecedores/logs e obrigações da loja seguem na preparação para beta.
+
+## Operação e evidências — 11/09/2026
+
+API `queep-api-00017-k8m`, worker `queep-worker-00006-7l9` e manutenção atualizados.
+`QUEEP_ACCOUNT_DELETION_ENABLED=true`; faturamento continua em `development`.
+Sequência: `deploy-dev.sh --public`, `deploy-ai-dev.sh`,
+`enable-account-deletion-dev.sh`. Este último confere a imagem API/worker, prepara
+permissão mínima de Auth, atualiza/testa a manutenção e então ativa a API.
+
+146 testes backend; três testes Swift; iPhone: cancelar diálogo, senha errada,
+exclusão imediata, agendamento/reabertura/recuperação. Mac: bloqueio de outra sessão
+com tela aberta e recuperação. Todos aprovados; builds cloud Mac/iPhone aprovados.
+
+`scripts/smoke-account-recovery-cloud.py` passou com contas novas descartáveis:
+30 dias, bloqueio, Auth/dados preservados, restauração da mesma imagem, prazo vencido,
+exclusão imediata, isolamento e ausência final em Auth/Firestore/Storage. O relógio
+foi avançado **somente nos registros de teste**, sem mudar a política de produção.
+A primeira rodada evidenciou uma disputa na preparação do relógio do teste com a
+retentativa inicial; o teste agora espera essa passagem terminar. O backend estava
+retomando corretamente. Execução final: `queep-image-cleanup-mmxd5`.
+
+Logs: `/tmp/queep-recovery-api-tests.log`, `/tmp/queep-recovery-race-tests.log`,
+`/tmp/queep-recovery-ios-tests.log`, `/tmp/queep-recovery-mac-tests.log`,
+`/tmp/queep-recovery-cloud-smoke-final.log`. Relatório de fixtures em
+`.local/account-recovery-smoke.json`, ignorado por Git/builds.
 
 Referências: [Apple](https://developer.apple.com/support/offering-account-deletion-in-your-app/),
-[Firebase Auth](https://firebase.google.com/docs/auth/admin/manage-users),
-[RevenueCat V2](https://www.revenuecat.com/docs/api-v2/customer).
+[Firebase Auth](https://firebase.google.com/docs/auth/admin/manage-users).

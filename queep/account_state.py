@@ -1,4 +1,4 @@
-"""A permanent, content-free barrier against late writes and billing callbacks."""
+"""Account lifecycle barrier shared by the API and asynchronous writers."""
 
 import hashlib
 
@@ -10,9 +10,15 @@ def deletion_document(db, uid):
 
 
 def is_closed(db, uid, tx=None):
-    return deletion_document(db, uid).get(transaction=tx).exists
+    record = deletion_document(db, uid).get(transaction=tx).to_dict()
+    return bool(record and record.get("state") != "active")
 
 
 def require_open(db, uid, tx=None):
     if is_closed(db, uid, tx):
         raise HTTPException(401, "Esta conta foi encerrada", headers={"WWW-Authenticate": "Bearer"})
+
+
+def account_version(db, uid, tx=None):
+    record = deletion_document(db, uid).get(transaction=tx).to_dict() or {}
+    return record.get("version", 0)

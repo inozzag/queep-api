@@ -13,3 +13,4 @@ evaluation/runs/
 
 .env.billing
 .env.accounts
+.local/

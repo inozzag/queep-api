@@ -8,6 +8,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Req
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from firebase_admin import auth
 from google.api_core.exceptions import DeadlineExceeded, FailedPrecondition, ServiceUnavailable
+from pydantic import BaseModel, Field
 
 from queep.account_state import deletion_document, require_open
 from queep.accounts import Accounts
@@ -101,35 +102,63 @@ def subscription_access(uid: UID, subscriptions: Subscriptions):
     return subscriptions.access(uid)
 
 
-@app.post("/v1/account/deletion", status_code=202)
-def delete_account(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
-                   background: BackgroundTasks):
+class AccountChange(BaseModel):
+    operation_id: UUID
+    version: int = Field(ge=0)
+    immediate: bool = False
+
+
+def account_claims(credentials, recent=False, revoked=True):
     if not credentials:
         raise HTTPException(401, "Entre na sua conta")
     try:
-        claims = auth.verify_id_token(credentials.credentials, app=firebase_app())
-        uid = claims["uid"]
-        # A retry of an accepted request remains safe after sessions were revoked.
-        existing = deletion_document(database(), uid).get().to_dict()
-        if not existing:
-            if not Settings().account_deletion_enabled:
-                raise HTTPException(503, "A exclusão de conta ainda não está disponível.")
-            auth.verify_id_token(credentials.credentials, app=firebase_app(), check_revoked=True)
+        claims = auth.verify_id_token(credentials.credentials, app=firebase_app(),
+                                      check_revoked=revoked)
+        if recent:
             age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
             if not 0 <= age <= 300:
-                raise HTTPException(403, "Confirme sua senha novamente para excluir a conta.")
+                raise HTTPException(403, "Confirme sua senha novamente para alterar a exclusão.")
+        return claims
     except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
             auth.UserNotFoundError, ValueError) as exc:
         raise HTTPException(401, "Sessão inválida") from exc
+
+
+@app.post("/v1/account/deletion", status_code=202)
+def delete_account(change: AccountChange,
+                   credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+                   background: BackgroundTasks):
+    claims = account_claims(credentials, revoked=False)
+    uid = claims["uid"]
+    existing = deletion_document(database(), uid).get().to_dict() or {}
     service = Accounts(database(), image_bucket(), Settings())
-    service.request(uid)
-    background.add_task(service.resume, uid)
-    return {"status": "deleting"}
+    # Only an exact retry is accepted after the user has been permanently erased.
+    if existing.get("operation_id") == str(change.operation_id):
+        return service.status(existing)
+    if not Settings().account_deletion_enabled:
+        raise HTTPException(503, "A exclusão de conta ainda não está disponível.")
+    account_claims(credentials, recent=True)
+    result = service.request(uid, immediate=change.immediate, version=change.version,
+                             operation_id=str(change.operation_id))
+    if result["status"] == "deleting":
+        background.add_task(service.resume, uid)
+    return result
+
+
+@app.post("/v1/account/deletion/cancel")
+def cancel_account_deletion(
+    change: AccountChange,
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)],
+):
+    uid = account_claims(credentials, recent=True)["uid"]
+    return Accounts(database(), image_bucket(), Settings()).cancel(
+        uid, change.version, str(change.operation_id))
 
 
 @app.get("/v1/account")
-def account_status(uid: UID):
-    return {"active": True}
+def account_status(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+    uid = account_claims(credentials)["uid"]
+    return Accounts(database(), image_bucket(), Settings()).get_status(uid)
 
 
 @app.post("/v1/billing/sync", response_model=Access)
