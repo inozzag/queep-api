@@ -71,3 +71,7 @@ não uma garantia de recuperação para qualquer conteúdo.
 Referências: [áudio OpenRouter](https://openrouter.ai/docs/guides/overview/multimodal/audio),
 [vídeo OpenRouter](https://openrouter.ai/docs/guides/overview/multimodal/videos),
 [oEmbed Vimeo](https://help.vimeo.com/hc/en-us/articles/12427952430481-Overview-oEmbed).
+
+## Editar título e anotações
+
+`PATCH /v1/references/{id}` aceita, desde 12/09/2026, um corpo com `kind` igual ao da referência de áudio/vídeo, `title`, `text`, `revision` e `mutation_id`. O arquivo e seus metadados não mudam; a revisão sobe, a análise volta para a fila (com reserva de operação e, para mídia, dos segundos de áudio, como em uma nova tentativa) e o mesmo `mutation_id` repetido devolve o mesmo resultado. Tipo diferente ou revisão desatualizada respondem 409. Cobertura em `tests/test_images.py` e `tests/test_media.py`.

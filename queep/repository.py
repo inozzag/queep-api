@@ -10,7 +10,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import require_open
-from queep.models import Capture, Edit, Interpretation, Library, Reference
+from queep.models import Capture, Edit, Interpretation, Library, MetadataEdit, Reference
 from queep.usage import reserve_operation
 
 
@@ -88,6 +88,40 @@ class Repository:
             # Outbox and content are atomic. A later dispatcher can safely enqueue Cloud Tasks.
             tx.set(job, new_job(uid, ref_id, record["revision"], now))
             return record
+
+        return Reference.model_validate(self.transact(write))
+
+    def edit_metadata(self, uid: str, ref_id: str, edit: MetadataEdit):
+        """Changes title and notes of an upload; the file stays and the analysis runs again."""
+        doc = self.collection(uid).document(ref_id)
+        job = self.job(uid, ref_id)
+        now = datetime.now(UTC)
+
+        @firestore.transactional
+        def write(tx):
+            require_open(self.db, uid, tx)
+            old = doc.get(transaction=tx).to_dict()
+            if not old or old.get("deleted"):
+                raise HTTPException(404, "Referência não encontrada")
+            if old["kind"] != edit.kind:
+                raise HTTPException(409, "O tipo da referência não pode ser alterado")
+            digest = fingerprint({"kind": edit.kind, "title": edit.title, "text": edit.text,
+                                  "file": old["create_hash"]})
+            mutation_id = str(edit.mutation_id)
+            if old.get("last_mutation_id") == mutation_id:
+                if old["content_hash"] != digest:
+                    raise HTTPException(409, "Identificador de edição reutilizado")
+                return old
+            if old["revision"] != edit.revision:
+                raise HTTPException(409, "A referência mudou. Atualize antes de editar")
+            reserve_operation(self.db, uid, tx, now=now,
+                              media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
+            changes = {"title": edit.title, "text": edit.text, "revision": old["revision"] + 1,
+                       "updated_at": now, "status": "queued", "analysis": None,
+                       "content_hash": digest, "last_mutation_id": mutation_id}
+            tx.update(doc, changes)
+            tx.set(job, new_job(uid, ref_id, changes["revision"], now))
+            return {**old, **changes}
 
         return Reference.model_validate(self.transact(write))
 

@@ -41,3 +41,7 @@ Referências: [Storage e precondições](https://docs.cloud.google.com/python/do
 [Pillow](https://pillow.readthedocs.io/en/stable/reference/Image.html),
 [job agendado](https://docs.cloud.google.com/run/docs/execute/jobs-on-schedule),
 [PhotosPicker](https://developer.apple.com/documentation/photosui/photospicker).
+
+## Editar título e anotações
+
+`PATCH /v1/references/{id}` aceita, desde 12/09/2026, um corpo com `kind` igual ao da referência de imagem, `title`, `text`, `revision` e `mutation_id`. O arquivo e seus metadados não mudam; a revisão sobe, a análise volta para a fila (com reserva de operação e, para mídia, dos segundos de áudio, como em uma nova tentativa) e o mesmo `mutation_id` repetido devolve o mesmo resultado. Tipo diferente ou revisão desatualizada respondem 409. Cobertura em `tests/test_images.py` e `tests/test_media.py`.

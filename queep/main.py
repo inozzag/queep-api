@@ -20,7 +20,16 @@ from queep.images import MAX_BYTES, Images
 from queep.jobs import Jobs
 from queep.media import MAX_BYTES as MAX_MEDIA_BYTES
 from queep.media import MediaFiles
-from queep.models import Capture, Edit, Library, Reference, RetryAnalysis, Search, SearchResults
+from queep.models import (
+    Capture,
+    Edit,
+    Library,
+    MetadataEdit,
+    Reference,
+    RetryAnalysis,
+    Search,
+    SearchResults,
+)
 from queep.repository import Repository
 from queep.search import search
 from queep.usage import snapshot
@@ -264,8 +273,12 @@ def get(ref_id: UUID, uid: UID, repo: Repo):
 
 
 @app.patch("/v1/references/{ref_id}", response_model=Reference)
-def edit(ref_id: UUID, capture: Edit, uid: PaidUID, repo: Repo, background: BackgroundTasks):
-    reference = repo.save(uid, str(ref_id), capture, editing=True)
+def edit(ref_id: UUID, capture: Edit | MetadataEdit, uid: PaidUID, repo: Repo,
+         background: BackgroundTasks):
+    if isinstance(capture, MetadataEdit):
+        reference = repo.edit_metadata(uid, str(ref_id), capture)
+    else:
+        reference = repo.save(uid, str(ref_id), capture, editing=True)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 

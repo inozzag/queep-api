@@ -17,6 +17,7 @@ from queep.config import Settings, database, image_bucket
 from queep.jobs import Jobs
 from queep.media import MAX_BYTES, MediaEvidence, MediaFiles, evidence, prepare
 from queep.models import Interpretation, Reference
+from queep.repository import Repository
 from queep.worker import process
 
 
@@ -251,3 +252,25 @@ def test_vision_never_receives_spoken_descriptions(video):
     assert "input_audio" not in json.dumps(received[2])
     assert "botões brancos" not in json.dumps(received[2], ensure_ascii=False)
     assert "image_url" not in json.dumps(received[0])
+
+
+def test_media_title_and_notes_edit_keeps_file_and_requeues(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    first = client.put(path + "/media?title=Reuni%C3%A3o", content=wav(), headers=headers)
+    assert first.status_code == 200, first.text
+    edit = {"kind": "audio", "title": "Reunião de kickoff", "text": "Decisões: prazo e escopo",
+            "revision": 1, "mutation_id": str(uuid4())}
+    edited = client.patch(path, json=edit, headers=headers)
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert (body["title"], body["text"], body["revision"], body["status"]) == (
+        "Reunião de kickoff", "Decisões: prazo e escopo", 2, "queued")
+    assert body["media"] == first.json()["media"]
+    assert body["analysis"] is None
+    wrong_kind = {**edit, "kind": "video", "revision": 2, "mutation_id": str(uuid4())}
+    assert client.patch(path, json=wrong_kind, headers=headers).status_code == 409
+    assert Repository(database()).job(uid, ref_id).get().to_dict()["revision"] == 2
+    assert client.get(path + "/media", headers=headers).status_code == 200
+    assert client.delete(path + "?revision=2", headers=headers).status_code == 204

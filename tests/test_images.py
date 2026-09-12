@@ -234,3 +234,30 @@ def test_late_upload_cannot_publish_after_concurrent_retry_and_delete(account, m
     assert not list(
         image_bucket().list_blobs(prefix=service.prefix(uid, ref_id, reference.image.sha256))
     )
+
+
+def test_image_title_and_notes_edit_keeps_file_and_requeues(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    first = client.put(path + "/image?title=Quadro", content=picture(), headers=headers)
+    assert first.status_code == 200, first.text
+    edit = {"kind": "image", "title": "Quadro do workshop", "text": "Ideias de **onboarding**",
+            "revision": 1, "mutation_id": str(uuid4())}
+    edited = client.patch(path, json=edit, headers=headers)
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert (body["title"], body["text"], body["revision"], body["status"]) == (
+        "Quadro do workshop", "Ideias de **onboarding**", 2, "queued")
+    assert body["image"] == first.json()["image"]
+    assert body["analysis"] is None
+    assert client.patch(path, json=edit, headers=headers).json() == body
+    fresh = {**edit, "mutation_id": str(uuid4())}
+    assert client.patch(path, json=fresh, headers=headers).status_code == 409
+    wrong_kind = {**fresh, "kind": "audio", "revision": 2}
+    assert client.patch(path, json=wrong_kind, headers=headers).status_code == 409
+    assert media().repo.job(uid, ref_id).get().to_dict()["revision"] == 2
+    assert client.get(path + "/image", headers=headers).status_code == 200
+    assert client.get(path, headers=headers).json()["text"] == "Ideias de **onboarding**"
+    assert client.delete(path + "?revision=1", headers=headers).status_code == 409
+    assert client.delete(path + "?revision=2", headers=headers).status_code == 204

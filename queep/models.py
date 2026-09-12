@@ -30,6 +30,17 @@ class Edit(Capture):
     mutation_id: UUID
 
 
+class MetadataEdit(BaseModel):
+    """Title and notes of an uploaded image or media file; the file itself never changes."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    kind: Literal["image", "audio", "video"]
+    title: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=30000)
+    revision: int = Field(ge=1)
+    mutation_id: UUID
+
+
 class Interpretation(BaseModel):
     summary: str = Field(max_length=4000)
     topics: list[str] = Field(default_factory=list, max_length=30)
