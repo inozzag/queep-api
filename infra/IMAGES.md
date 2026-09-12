@@ -5,21 +5,21 @@
 - API aceita JPEG/PNG de até 12 MiB e 20 milhões de pixels; decodifica o arquivo
   inteiro, rejeita animações, normaliza e cria miniatura de até 560 px. Preserva alpha.
 - Arquivos são versões otimizadas para referências, não cópias arquivísticas dos
-  originais. Não há leitura de texto, classificação ou embeddings nesta entrega.
-- O upload passa pela API. Esse limite mantém o fluxo inicial simples; vídeos e
-  arquivos maiores precisarão de upload direto/resumível em outra entrega.
+  originais. Leitura de texto, interpretação e embeddings são assíncronos; [IA](AI.md).
+- O upload passa pela API. Vídeos curtos usam o mesmo ciclo de vida, com limites
+  próprios em [MEDIA.md](MEDIA.md). Upload direto/resumível de arquivos maiores fica para depois.
 
 ## Consistência
 
 1. Reserva transacional do UUID e hash do envio em `image_uploads`; placeholder
-   oculto em `references` impede colisão com nota/link. Nenhum job de análise ainda.
+   oculto em `references` impede colisão com outro tipo de referência.
 2. Imagem e miniatura imutáveis no Storage, com precondição de geração zero.
 3. Confirmação transacional publica referência e outbox apenas após ambos os objetos.
    Repetição com mesmo UUID, título e bytes retorna a referência; conteúdo diferente
    recebe 409. A imagem não pode ser convertida em nota/link pela edição.
 4. Exclusão grava tombstone e pedido de limpeza juntos; a API tenta remover objetos.
    Falha no Storage mantém o pedido persistido. Leituras já são bloqueadas.
-5. Job privado a cada 30 minutos: reservas abandonadas por 1 hora viram tombstones;
+5. Job privado a cada 5 minutos: reservas abandonadas por 1 hora viram tombstones;
    exclusões são repetidas. Mantém a reserva de limpeza por pelo menos 10 minutos
    para cobrir uploads já em andamento (operações de Storage têm timeout de 30 s,
    sem retry implícito). Só depois remove a reserva, mantendo o tombstone.

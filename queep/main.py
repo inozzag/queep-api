@@ -18,6 +18,8 @@ from queep.config import Settings, database, firebase_app, image_bucket
 from queep.dispatch import dispatch_one
 from queep.images import MAX_BYTES, Images
 from queep.jobs import Jobs
+from queep.media import MAX_BYTES as MAX_MEDIA_BYTES
+from queep.media import MediaFiles
 from queep.models import Capture, Edit, Library, Reference, RetryAnalysis, Search, SearchResults
 from queep.repository import Repository
 from queep.search import search
@@ -207,6 +209,31 @@ async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Medi
                                              bytes(data), limiter=image_limiter)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
+
+
+@app.put("/v1/references/{ref_id}/media", response_model=Reference)
+async def upload_media(ref_id: UUID, request: Request, uid: PaidUID,
+                       background: BackgroundTasks,
+                       title: Annotated[str, Query(max_length=200)] = ""):
+    # Bound concurrent buffering as well as decoder work.
+    async with image_limiter:
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_MEDIA_BYTES:
+                raise HTTPException(413, "Escolha um áudio ou vídeo de até 25 MB.")
+            data.extend(chunk)
+        service = MediaFiles(database(), image_bucket())
+        reference = await anyio.to_thread.run_sync(service.upload, uid, str(ref_id),
+                                                  title.strip(), bytes(data))
+    background.add_task(dispatch_one, uid, str(ref_id))
+    return reference
+
+
+@app.get("/v1/references/{ref_id}/media")
+def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False):
+    data, content_type = MediaFiles(database(), image_bucket()).read(uid, str(ref_id), thumbnail)
+    return Response(content=data, media_type=content_type,
+                    headers={"Content-Disposition": "inline"})
 
 
 @app.get("/v1/references/{ref_id}/image", responses={200: {"content": {

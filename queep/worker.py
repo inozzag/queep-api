@@ -17,6 +17,7 @@ from queep.config import Settings, database, firebase_app, image_bucket
 from queep.dispatch import enqueue
 from queep.images import Images
 from queep.jobs import Jobs
+from queep.media import MediaFiles, evidence
 from queep.sources import read_source
 
 logging.basicConfig(level=logging.INFO)
@@ -55,7 +56,7 @@ def engine():
               Budget(database(), settings.ai_daily_budget, settings.search_daily_limit))
 
 
-def process(task, jobs, ai, images, reader=read_source):
+def process(task, jobs, ai, images, reader=read_source, media=None):
     work = jobs.claim(task)
     if not work:
         return "ignored"
@@ -68,12 +69,21 @@ def process(task, jobs, ai, images, reader=read_source):
             ref = ref.model_copy(update={"source": reader(ref.url)})
             if not jobs.current(work):
                 return "stale"
-        analysis = ai.interpret(ref, data)
+        transcript = None
+        if ref.media:
+            files = media or MediaFiles(images.db, images.bucket)
+            content = evidence(files.read(work["uid"], ref.id)[0], ref.media)
+            if not jobs.current(work):
+                return "stale"
+            analysis, transcript = ai.interpret_media(ref, content)
+            ref = ref.model_copy(update={"transcript": transcript})
+        else:
+            analysis = ai.interpret(ref, data)
         if not jobs.current(work):
             return "stale"
         vector = ai.embed(document(ref, analysis))
         return "ready" if jobs.finish(work, analysis=analysis, vector=vector,
-                                       source=ref.source) else "stale"
+                                       source=ref.source, transcript=transcript) else "stale"
     except (AIError, HTTPException) as error:
         code = str(error) if isinstance(error, AIError) else f"http_{error.status_code}"
         jobs.finish(work, error=code)

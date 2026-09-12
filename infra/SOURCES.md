@@ -8,6 +8,9 @@ usuário são preservados. Editar descarta a extração anterior; excluir remove
 ## Cobertura
 
 - HTML, texto e Markdown públicos. GitHub: README renderizado, sem baixar o repositório.
+- YouTube/Vimeo: título e autor públicos via oEmbed. Instagram: descrição pública
+  quando acessível. `content_kind=metadata` distingue esses dados de texto de página.
+  Fala/cenas não são lidas pelo link; [cobertura social e envio de arquivos](MEDIA.md).
 - Até 12.000 bytes de texto armazenados; até 8.000 chegam à interpretação. Texto e
   resumo entram no vetor; a conferência usa resumo e trecho relacionado à consulta.
 - Cobertura sempre parcial: só texto acessível, sem imagens da página, vídeo ou áudio.

@@ -22,7 +22,7 @@ gcloud run deploy queep-worker "${cloud[@]}" --region="$region" --image="$digest
   --service-account=queep-ai@queep-dev-hstlx.iam.gserviceaccount.com \
   --set-env-vars="$settings" --set-secrets="OPENROUTER_API_KEY=queep-openrouter:$secret_version" \
   --invoker-iam-check --min=0 --max=1 --cpu=1 --memory=1Gi \
-  --concurrency=2 --timeout=120 --cpu-throttling --quiet
+  --concurrency=1 --timeout=300 --cpu-throttling --quiet
 gcloud run services add-iam-policy-binding queep-worker "${cloud[@]}" --region="$region" \
   --member="serviceAccount:$identity" --role=roles/run.invoker --quiet --format=none
 

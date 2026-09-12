@@ -136,7 +136,7 @@ class Repository:
             tx.set(doc, {"deleted": True, "revision": revision + 1,
                          "updated_at": datetime.now(UTC)})
             tx.delete(job)
-            if old.get("image"):
+            if old.get("image") or old.get("media"):
                 # Persist cleanup with the tombstone; Storage failures cannot lose the work.
                 from datetime import timedelta
                 tx.update(upload, {"state": "cleanup", "cleanup_after": datetime.now(UTC),

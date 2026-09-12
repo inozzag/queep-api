@@ -83,6 +83,18 @@ def prepare(data: bytes) -> PreparedImage:
 
 
 class Images:
+    prepare = staticmethod(prepare)
+
+    def kind(self, image):
+        return "image"
+
+    def fields(self, image):
+        return {"image": image.info.model_dump()}
+
+    def objects(self, image):
+        return [("original", image.original, image.info.content_type),
+                ("thumbnail", image.thumbnail, image.info.content_type)]
+
     def __init__(self, db, bucket):
         self.repo = Repository(db)
         self.db = db
@@ -97,7 +109,8 @@ class Images:
     def reserve(self, uid, ref_id, title, image):
         doc = self.repo.collection(uid).document(ref_id)
         manifest = self.manifest(uid, ref_id)
-        digest = fingerprint({"kind": "image", "title": title, "sha256": image.info.sha256})
+        digest = fingerprint({"kind": self.kind(image), "title": title,
+                              "sha256": image.info.sha256})
         now = datetime.now(UTC)
 
         @firestore.transactional
@@ -146,14 +159,14 @@ class Images:
             pass
 
     def upload(self, uid, ref_id, title, data):
-        image = prepare(data)
+        image = self.prepare(data)
         digest, existing = self.reserve(uid, ref_id, title, image)
         if existing:
             return existing
         prefix = self.prefix(uid, ref_id, image.info.sha256)
         try:
-            self.put_object(f"{prefix}/original", image.original, image.info.content_type)
-            self.put_object(f"{prefix}/thumbnail", image.thumbnail, image.info.content_type)
+            for name, content, content_type in self.objects(image):
+                self.put_object(f"{prefix}/{name}", content, content_type)
         except GoogleAPICallError as error:
             # Reservation remains retryable and is swept if abandoned.
             raise HTTPException(503, "Upload não confirmado. Tente novamente") from error
@@ -178,11 +191,11 @@ class Images:
                 raise HTTPException(409, "Este envio foi encerrado")
             record = {
                 "id": ref_id,
-                "kind": "image",
+                "kind": self.kind(image),
                 "title": title,
                 "text": "",
                 "url": None,
-                "image": image.info.model_dump(),
+                **self.fields(image),
                 "deleted": False,
                 "revision": 1,
                 "status": "queued",

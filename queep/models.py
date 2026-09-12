@@ -56,6 +56,7 @@ class ImageInfo(BaseModel):
 
 
 class SourceContent(BaseModel):
+    content_kind: Literal["page", "metadata"] = "page"
     state: Literal["read", "unavailable"]
     url: str = Field(max_length=4096)
     title: str = Field(default="", max_length=200)
@@ -65,9 +66,19 @@ class SourceContent(BaseModel):
     limitations: list[str] = Field(default_factory=list, max_length=4)
 
 
+class MediaInfo(BaseModel):
+    sha256: str
+    content_type: Literal["audio/mp4", "video/mp4"]
+    duration_seconds: float = Field(gt=0, le=301)
+    byte_count: int
+    has_audio: bool
+    width: int | None = None
+    height: int | None = None
+
+
 class Reference(BaseModel):
     id: str
-    kind: Literal["note", "link", "image"]
+    kind: Literal["note", "link", "image", "audio", "video"]
     title: str
     text: str
     url: str | None
@@ -78,6 +89,8 @@ class Reference(BaseModel):
     analysis: Interpretation | None = None
     image: ImageInfo | None = None
     source: SourceContent | None = None
+    media: MediaInfo | None = None
+    transcript: str | None = Field(default=None, max_length=18000)
 
 
 class Library(BaseModel):

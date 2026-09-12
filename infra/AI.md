@@ -4,7 +4,7 @@
 
 Captura confirma conteúdo/outbox → Cloud Tasks → `queep-worker` privado → análise e
 vetor publicados na revisão atual. Dispatcher agendado a cada minuto recupera falhas
-de envio. Jobs usam lease de 180 s, até 3 tentativas e identificadores diferentes por
+de envio. Jobs usam lease de 360 s, até 3 tentativas e identificadores diferentes por
 execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição/exclusão
 invalida o processamento anterior. O botão de nova tentativa abre outra execução.
 
@@ -12,10 +12,15 @@ invalida o processamento anterior. O botão de nova tentativa abre outra execuç
 embeddings. Seleciona 10 candidatos e confere correspondência; revalida revisões e
 exclusões antes de responder. Pode retornar vazio. Não garante todos os resultados
 de uma biblioteca grande. Consultas usam POST para não expor o texto em URLs.
+O verificador informa também se a consulta exige um formato (`requested_kind`). A
+API confere os tipos reais antes de devolver os IDs; um pedido explícito de vídeo
+não pode retornar áudio, mesmo que o modelo o inclua na seleção. Assunto e formato
+são separados: ferramentas para criar vídeos não precisam ser arquivos de vídeo.
 
 | Etapa | Modelo / rota |
 | --- | --- |
 | Notas, imagens e texto de links | `google/gemini-2.5-flash-lite` / `google-vertex` |
+| Transcrição e cenas de vídeo, em chamadas separadas | `google/gemini-2.5-flash-lite` / `google-vertex` |
 | Vetores de 768 dimensões | `google/gemini-embedding-2` / `google-vertex/us` |
 | Conferência da busca | `google/gemini-3.1-flash-lite` / `google-vertex/global` |
 
@@ -35,8 +40,9 @@ Imagens são reduzidas a 1536 px para interpretação. Notas longas recebem aná
 parcial; o documento vetorial usa até 3.500 bytes de texto e a análise. A conferência
 usa trechos de até 600 bytes por nota. Links públicos recebem extração de texto,
 com cobertura parcial e limites descritos em [SOURCES.md](SOURCES.md).
-Áudio, vídeo, busca exaustiva, filtro textual
-complementar e localização de trechos longos permanecem fora desta entrega.
+Áudio/vídeo de até cinco minutos usam transcrição e amostragem visual; limites em
+[MEDIA.md](MEDIA.md). Busca exaustiva, filtro textual complementar e localização de
+trechos longos permanecem fora desta entrega.
 
 ## Publicar
 
@@ -49,7 +55,7 @@ complementar e localização de trechos longos permanecem fora desta entrega.
 5. `bash infra/deploy-image-cleanup-dev.sh` atualiza a limpeza de imagens.
 
 Scripts fixam projeto `queep-dev-hstlx`, região `southamerica-east1` e conta
-`gazzoni@hstlx.com`. Worker: escala 0–1, concorrência 2, timeout 120 s. Fila: 0,2
+`gazzoni@hstlx.com`. Worker: escala 0–1, concorrência 1, timeout 300 s. Fila: 0,2
 entregas/s, 2 simultâneas. Apenas `queep-task-invoker` invoca o worker; o container
 também verifica assinatura/audiência/email OIDC. A API pública não monta suas rotas.
 

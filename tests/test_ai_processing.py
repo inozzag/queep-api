@@ -201,9 +201,18 @@ def test_partial_link_does_not_invent_or_fetch_site(library):
 def test_search_rejects_ids_outside_candidates(library):
     *_, ref = library
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"ids": [str(uuid4())]})}}]})
+        "content": json.dumps({"requested_kind": "any", "ids": [str(uuid4())]})}}]})
     with pytest.raises(AIError, match="invalid_selection"):
         ai.verify("CRM", [ref])
+
+
+def test_explicit_media_kind_rejects_inconsistent_model_selection(library):
+    *_, ref = library
+    audio = ref.model_copy(update={"id": "audio", "kind": "audio"})
+    video = ref.model_copy(update={"id": "video", "kind": "video"})
+    ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": "video", "ids": ["audio", "video"]})}}]})
+    assert ai.verify("Vídeos sobre esta ferramenta", [audio, video]) == ["video"]
 
 
 def source_fixture():
@@ -234,9 +243,10 @@ def test_link_content_reaches_ai_embedding_verification_and_persistence(library)
     assert "synchronous and async" in calls[0]["messages"][1]["content"][0]["text"]
     assert "synchronous and async" in documents[0]
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"ids": [current.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
     assert verifier.verify("Cliente HTTP Python assíncrono", [current]) == [current.id]
     assert "synchronous and async" in requests[0]["messages"][1]["content"]
+    assert json.loads(requests[0]["messages"][1]["content"])["candidates"][0]["kind"] == "link"
     # Editing discards old content, analysis and vector together.
     updated = repo.save(uid, ref.id, Edit(kind="link", url="https://example.com", revision=1,
                                          mutation_id=uuid4()), editing=True)
@@ -283,7 +293,7 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
                                  "url": "https://example.com/" + "x" * 2000,
                                  "analysis": analysis}) for _ in range(10)]
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": '{"ids":[]}'}}]})
+        "content": '{"requested_kind":"any","ids":[]}'}}]})
     assert ai.verify("Encontre uma referência", refs) == []
     assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
     assert len(document(refs[0], ANALYSIS).encode()) < 7000

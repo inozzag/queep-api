@@ -1,0 +1,67 @@
+{
+  "tested_at": "2026-09-12T01:36:50.638192+00:00",
+  "project": "queep-dev-hstlx",
+  "processing_and_search_seconds": 27.3,
+  "media": [
+    {
+      "kind": "audio",
+      "duration": 14.987,
+      "summary": "No áudio: O projeto Aurora é uma ferramenta de inteligência artificial projetada para organizar clipes de jogos. A ferramenta também sugere títulos para vídeos criados a partir desses clipes. A interface do usuário apresenta um design com fundo escuro e elementos visuais claros.",
+      "appearance": []
+    },
+    {
+      "kind": "video",
+      "duration": 20.9,
+      "summary": "No áudio: O projeto Aurora é uma ferramenta de inteligência artificial projetada para organizar clipes de jogos. A ferramenta também sugere títulos para vídeos criados a partir desses clipes. A interface do usuário apresenta um design com fundo escuro e elementos visuais claros. Nas cenas amostradas: O material consiste em uma série de imagens de vídeo em preto. Não há conteúdo visível para descrever.",
+      "appearance": [
+        "Fundo azul escuro"
+      ]
+    }
+  ],
+  "sources": [
+    {
+      "url": "https://www.youtube.com/watch?v=M7lc1UVf-VE",
+      "state": "read"
+    },
+    {
+      "url": "https://vimeo.com/76979871",
+      "state": "unavailable"
+    },
+    {
+      "url": "https://www.instagram.com/p/queep-unavailable-fixture/",
+      "state": "unavailable"
+    }
+  ],
+  "queries": [
+    {
+      "query": "Ferramenta de IA que organiza clipes de jogos e sugere títulos de vídeos",
+      "expected_count": 2,
+      "found_count": 2,
+      "passed": true
+    },
+    {
+      "query": "Vídeos que mostram uma interface com botões brancos e tabela de partidas",
+      "expected_count": 0,
+      "found_count": 0,
+      "passed": true
+    },
+    {
+      "query": "Vídeos sobre a ferramenta Aurora",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Áudios sobre ferramentas de IA",
+      "expected_count": 1,
+      "found_count": 1,
+      "passed": true
+    },
+    {
+      "query": "Receitas de bolo de chocolate",
+      "expected_count": 0,
+      "found_count": 0,
+      "passed": true
+    }
+  ]
+}

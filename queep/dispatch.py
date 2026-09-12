@@ -25,7 +25,7 @@ def enqueue(task, settings, jobs, client=None):
     name = f"{task['job_id']}-{task['run_id']}-r{task['revision']}-a{task['attempt']}"
     try:
         client.create_task(parent=parent, task={
-            "name": f"{parent}/tasks/{name}", "dispatch_deadline": {"seconds": 120},
+            "name": f"{parent}/tasks/{name}", "dispatch_deadline": {"seconds": 300},
             "http_request": {"http_method": tasks_v2.HttpMethod.POST,
                              "url": settings.worker_url + "/tasks/process",
                              "headers": {"Content-Type": "application/json"},

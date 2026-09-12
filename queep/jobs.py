@@ -16,7 +16,7 @@ from queep.repository import Repository, new_job
 
 class Jobs:
     MAX_ATTEMPTS = 3
-    LEASE_SECONDS = 180
+    LEASE_SECONDS = 360
 
     def __init__(self, db):
         self.db, self.repo = db, Repository(db)
@@ -137,7 +137,7 @@ class Jobs:
         return bool(self.matches(job, work) and job.get("token") == work["token"]
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
-    def finish(self, work, analysis=None, vector=None, error=None, source=None):
+    def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None):
         doc = self.db.collection("jobs").document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -165,6 +165,7 @@ class Jobs:
             else:
                 tx.update(ref, {"status": "ready", "analysis": analysis.model_dump(),
                                 "source": source.model_dump() if source else None,
+                                "transcript": transcript,
                                 "embedding": Vector(vector), "embedding_space": SPACE,
                                 "analysis_model": INTERPRETER["id"],
                                 "analysis_version": ANALYSIS_VERSION, "updated_at": now})
