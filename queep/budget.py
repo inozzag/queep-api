@@ -8,6 +8,7 @@ from google.cloud import firestore
 
 from queep.account_state import require_open
 from queep.repository import Repository
+from queep.usage import document, exceeded, window
 
 
 class Budget:
@@ -51,17 +52,20 @@ class Budget:
 
     def rate_limit(self, uid):
         """Per-account search limit, checked before paid calls."""
-        now = datetime.now(UTC)
-        doc = self.db.collection("users").document(uid).collection("usage").document(
-            now.date().isoformat())
+        now, reset = window()
+        doc = document(self.db, uid, now)
 
         @firestore.transactional
         def write(tx):
             require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict() or {}
             last = old.get("last_search")
-            if (old.get("searches", 0) >= self.search_daily_limit
-                    or (last and (now-last).total_seconds() < 1)):
-                raise HTTPException(429, "Limite de buscas atingido. Tente mais tarde.")
-            tx.set(doc, {"searches": old.get("searches", 0) + 1, "last_search": now})
+            if old.get("searches", 0) >= self.search_daily_limit:
+                raise exceeded("Limite diário de buscas atingido. Consulte Uso e privacidade.",
+                               reset, now)
+            if last and (now-last).total_seconds() < 1:
+                raise HTTPException(429, "Aguarde um instante antes de buscar novamente.",
+                                    headers={"Retry-After": "1"})
+            tx.set(doc, {"searches": old.get("searches", 0) + 1, "last_search": now,
+                         "expires_at": reset + timedelta(days=30)}, merge=True)
         self.repo.transact(write)

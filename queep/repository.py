@@ -11,6 +11,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import require_open
 from queep.models import Capture, Edit, Interpretation, Library, Reference
+from queep.usage import reserve_operation
 
 
 def fingerprint(payload: dict) -> str:
@@ -74,6 +75,7 @@ class Repository:
                 if old.get("deleted") or old["create_hash"] != digest:
                     raise HTTPException(409, "Identificador de envio já utilizado")
                 return old
+            reserve_operation(self.db, uid, tx, now=now)
             record = {
                 **payload, "id": ref_id, "status": "queued", "deleted": False,
                 "revision": old["revision"] + 1 if old else 1,

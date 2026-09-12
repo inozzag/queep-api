@@ -23,6 +23,7 @@ from queep.media import MediaFiles
 from queep.models import Capture, Edit, Library, Reference, RetryAnalysis, Search, SearchResults
 from queep.repository import Repository
 from queep.search import search
+from queep.usage import snapshot
 from queep.worker import engine
 
 
@@ -102,6 +103,11 @@ def health():
 @app.get("/v1/billing/access", response_model=Access)
 def subscription_access(uid: UID, subscriptions: Subscriptions):
     return subscriptions.access(uid)
+
+
+@app.get("/v1/usage")
+def usage(uid: UID):
+    return snapshot(database(), uid, Settings())
 
 
 class AccountChange(BaseModel):
@@ -200,13 +206,14 @@ def create(ref_id: UUID, capture: Capture, uid: PaidUID, repo: Repo, background:
 async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Media,
                        background: BackgroundTasks,
                        title: Annotated[str, Query(max_length=200)] = ""):
-    data = bytearray()
-    async for chunk in request.stream():
-        if len(data) + len(chunk) > MAX_BYTES:
-            raise HTTPException(413, "Escolha uma imagem de até 12 MB")
-        data.extend(chunk)
-    reference = await anyio.to_thread.run_sync(media.upload, uid, str(ref_id), title.strip(),
-                                             bytes(data), limiter=image_limiter)
+    async with image_limiter:
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_BYTES:
+                raise HTTPException(413, "Escolha uma imagem de até 12 MB")
+            data.extend(chunk)
+        reference = await anyio.to_thread.run_sync(media.upload, uid, str(ref_id), title.strip(),
+                                                 bytes(data))
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 

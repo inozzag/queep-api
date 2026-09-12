@@ -29,6 +29,9 @@ class Settings(BaseSettings):
     account_deletion_enabled: bool = Field(False, alias="QUEEP_ACCOUNT_DELETION_ENABLED")
     billing_accept_sandbox: bool = Field(False, alias="QUEEP_BILLING_ACCEPT_SANDBOX")
     search_daily_limit: int = Field(100, ge=1, le=10000, alias="QUEEP_SEARCH_DAILY_LIMIT")
+    operation_daily_limit: int = Field(100, ge=1, le=10000, alias="QUEEP_OPERATION_DAILY_LIMIT")
+    upload_daily_mib: int = Field(100, ge=1, le=10240, alias="QUEEP_UPLOAD_DAILY_MIB")
+    media_daily_minutes: int = Field(30, ge=1, le=1440, alias="QUEEP_MEDIA_DAILY_MINUTES")
 
     @model_validator(mode="after")
     def validate_emulators(self):

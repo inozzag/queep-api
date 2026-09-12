@@ -12,6 +12,7 @@ from queep.account_state import account_version, is_closed, require_open
 from queep.ai import ANALYSIS_VERSION, INTERPRETER, SPACE
 from queep.models import Reference
 from queep.repository import Repository, new_job
+from queep.usage import reserve_operation
 
 
 class Jobs:
@@ -188,6 +189,8 @@ class Jobs:
             if old["status"] != "error":
                 return Reference.model_validate(old)
             now = datetime.now(UTC)
+            reserve_operation(self.db, uid, tx, now=now,
+                              media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
             tx.update(doc, {"status": "queued", "updated_at": now})
             tx.set(job, new_job(uid, ref_id, revision, now))
             return Reference.model_validate({**old, "status": "queued", "updated_at": now})

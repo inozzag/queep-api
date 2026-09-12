@@ -18,6 +18,7 @@
     ]}
   ],
   "fieldOverrides": [
+    {"collectionGroup": "usage", "fieldPath": "expires_at", "ttl": true, "indexes": []},
     {"collectionGroup": "references", "fieldPath": "text", "indexes": []},
     {"collectionGroup": "references", "fieldPath": "analysis", "indexes": []},
     {"collectionGroup": "billing_events", "fieldPath": "expires_at", "ttl": true, "indexes": []},

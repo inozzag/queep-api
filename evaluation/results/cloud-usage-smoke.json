@@ -1,0 +1,11 @@
+{
+  "project": "queep-dev-hstlx",
+  "checked_at": "2026-09-12T02:05:46.146506+00:00",
+  "passed": true,
+  "limits": {
+    "operations": 100,
+    "upload_bytes": 104857600,
+    "media_seconds": 1800,
+    "searches": 100
+  }
+}

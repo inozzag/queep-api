@@ -124,6 +124,11 @@ class Images:
                 raise HTTPException(409, "Identificador de envio já utilizado")
             if upload and (upload["state"] != "pending" or upload["digest"] != digest):
                 raise HTTPException(409, "Identificador de envio já utilizado")
+            if not upload:
+                from queep.usage import reserve_operation
+                reserve_operation(self.db, uid, tx, now=now,
+                                  upload_bytes=sum(len(data) for _, data, _ in self.objects(image)),
+                                  media_seconds=getattr(image.info, "duration_seconds", 0))
             # Hidden placeholder also reserves the ID against simultaneous note/link creation.
             tx.set(doc, {"deleted": True, "uploading": True, "revision": 0, "updated_at": now})
             tx.set(
