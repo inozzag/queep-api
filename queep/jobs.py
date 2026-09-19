@@ -138,7 +138,8 @@ class Jobs:
         return bool(self.matches(job, work) and job.get("token") == work["token"]
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
-    def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None):
+    def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None,
+               title=None, image=None, images=None, author_image=None):
         doc = self.db.collection("jobs").document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -164,12 +165,27 @@ class Jobs:
                                 "dispatch_after": firestore.DELETE_FIELD if failed
                                 else now + timedelta(seconds=30 * job["attempts"])})
             else:
-                tx.update(ref, {"status": "ready", "analysis": analysis.model_dump(),
-                                "source": source.model_dump() if source else None,
-                                "transcript": transcript,
-                                "embedding": Vector(vector), "embedding_space": SPACE,
-                                "analysis_model": INTERPRETER["id"],
-                                "analysis_version": ANALYSIS_VERSION, "updated_at": now})
+                payload = {"status": "ready", "analysis": analysis.model_dump(),
+                           "source": source.model_dump() if source else None,
+                           "transcript": transcript,
+                           "embedding": Vector(vector), "embedding_space": SPACE,
+                           "analysis_model": INTERPRETER["id"],
+                           "analysis_version": ANALYSIS_VERSION, "updated_at": now}
+                if title and not (record.get("title") or "").strip():
+                    payload["title"] = title
+                if image and not record.get("image"):
+                    payload["image"] = image.model_dump()
+                if images:
+                    payload["images"] = [
+                        item.model_dump() if hasattr(item, "model_dump") else item
+                        for item in images
+                    ]
+                if author_image and not record.get("author_image"):
+                    payload["author_image"] = (
+                        author_image.model_dump() if hasattr(author_image, "model_dump")
+                        else author_image
+                    )
+                tx.update(ref, payload)
                 tx.delete(doc)
             return True
         return self.repo.transact(write)

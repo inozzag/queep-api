@@ -34,7 +34,7 @@ class MetadataEdit(BaseModel):
     """Title and notes of an uploaded image or media file; the file itself never changes."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-    kind: Literal["image", "audio", "video"]
+    kind: Literal["image", "audio", "video", "link"]
     title: str = Field(default="", max_length=200)
     text: str = Field(default="", max_length=30000)
     revision: int = Field(ge=1)
@@ -43,6 +43,7 @@ class MetadataEdit(BaseModel):
 
 class Interpretation(BaseModel):
     summary: str = Field(max_length=4000)
+    headline: str = Field(default="", max_length=80)
     topics: list[str] = Field(default_factory=list, max_length=30)
     entities: list[str] = Field(default_factory=list, max_length=30)
     usefulness: list[str] = Field(default_factory=list, max_length=20)
@@ -64,14 +65,18 @@ class ImageInfo(BaseModel):
     width: int
     height: int
     byte_count: int
+    preview_kind: Literal["photo", "video"] = "photo"
 
 
 class SourceContent(BaseModel):
-    content_kind: Literal["page", "metadata"] = "page"
+    content_kind: Literal["page", "metadata", "profile"] = "page"
     state: Literal["read", "unavailable"]
     url: str = Field(max_length=4096)
     title: str = Field(default="", max_length=200)
     text: str = Field(default="", max_length=12000)
+    author_name: str = Field(default="", max_length=200)
+    author_handle: str = Field(default="", max_length=32)
+    native_title: bool = False
     fetched_at: datetime
     truncated: bool = False
     limitations: list[str] = Field(default_factory=list, max_length=4)
@@ -99,6 +104,8 @@ class Reference(BaseModel):
     updated_at: datetime
     analysis: Interpretation | None = None
     image: ImageInfo | None = None
+    images: list[ImageInfo] | None = Field(default=None, max_length=4)
+    author_image: ImageInfo | None = None
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)

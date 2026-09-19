@@ -18,6 +18,7 @@ from queep.models import MediaInfo
 MAX_BYTES = 25 * 1024 * 1024
 MAX_SECONDS = 300
 FRAME_COUNT = 8
+SOCIAL_SECONDS = 15
 
 
 def run(command, timeout=25):
@@ -30,7 +31,7 @@ def run(command, timeout=25):
         ) from error
 
 
-def probe(path):
+def probe(path, max_seconds=MAX_SECONDS):
     raw = run(
         [
             "ffprobe",
@@ -53,10 +54,12 @@ def probe(path):
     try:
         metadata = json.loads(raw)
         streams = metadata["streams"]
-        durations = [float(metadata["format"]["duration"])]
+        durations = [float(metadata["format"]["duration"])] if metadata.get("format", {}).get("duration") else []
         durations += [float(s["duration"]) for s in streams if s.get("duration")]
-        duration = max(durations)
-        if not math.isfinite(duration) or not 0 < duration <= MAX_SECONDS + 0.05:
+        duration = max(durations) if durations else 0
+        if max_seconds is not None and (
+            not math.isfinite(duration) or not 0 < duration <= max_seconds + 0.05
+        ):
             raise HTTPException(413, "Escolha um áudio ou vídeo de até 5 minutos.")
         videos = [s for s in streams if s["codec_type"] == "video"]
         audios = [s for s in streams if s["codec_type"] == "audio"]
@@ -70,6 +73,8 @@ def probe(path):
             raise HTTPException(
                 415, "Escolha um vídeo MP4/H.264 de até 4K. O app prepara vídeos de Fotos."
             )
+        if not math.isfinite(duration) or duration <= 0:
+            duration = SOCIAL_SECONDS if max_seconds is None else duration
         return duration, video, bool(audios)
     except (ValueError, KeyError, TypeError) as error:
         raise HTTPException(415, "Arquivo de áudio ou vídeo inválido.") from error
@@ -240,6 +245,69 @@ def evidence(data, info):
                     timeout=remaining(),
                 )
                 frames.append((round(second, 2), target.read_bytes()))
+        return MediaEvidence(audio=audio, frames=frames)
+
+
+def social_evidence(data):
+    """First 15s of speech and a few frames from a social clip. The file is discarded."""
+    if not data:
+        return MediaEvidence(None, [])
+    with tempfile.TemporaryDirectory(prefix="queep-social-") as folder:
+        source = Path(folder) / "clip.mp4"
+        source.write_bytes(data)
+        try:
+            duration, video, has_audio = probe(source, max_seconds=None)
+        except HTTPException:
+            return MediaEvidence(None, [])
+        window = min(SOCIAL_SECONDS, duration) if duration else SOCIAL_SECONDS
+        audio = None
+        if has_audio:
+            target = Path(folder) / "audio.mp3"
+            try:
+                ffmpeg(
+                    source,
+                    "-vn",
+                    "-map",
+                    "0:a:0",
+                    "-ar",
+                    "16000",
+                    "-ac",
+                    "1",
+                    "-c:a",
+                    "libmp3lame",
+                    "-b:a",
+                    "32k",
+                    "-t",
+                    SOCIAL_SECONDS,
+                    target,
+                    timeout=25,
+                )
+                clip = target.read_bytes()
+                if clip and len(clip) <= 1_500_000:
+                    audio = clip
+            except HTTPException:
+                audio = None
+        frames = []
+        if video:
+            for ratio in (0.2, 0.5, 0.8):
+                second = max(0.1, window * ratio)
+                target = Path(folder) / f"frame-{ratio}.jpg"
+                try:
+                    ffmpeg(
+                        source,
+                        "-frames:v",
+                        "1",
+                        "-vf",
+                        "scale=768:768:force_original_aspect_ratio=decrease",
+                        "-q:v",
+                        "4",
+                        target,
+                        seek=second,
+                        timeout=15,
+                    )
+                    frames.append((round(second, 2), target.read_bytes()))
+                except HTTPException:
+                    continue
         return MediaEvidence(audio=audio, frames=frames)
 
 

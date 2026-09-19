@@ -92,7 +92,7 @@ class Repository:
         return Reference.model_validate(self.transact(write))
 
     def edit_metadata(self, uid: str, ref_id: str, edit: MetadataEdit):
-        """Changes title and notes of an upload; the file stays and the analysis runs again."""
+        """Title/notes of an upload, or the title of a social post. Uploads requeue analysis."""
         doc = self.collection(uid).document(ref_id)
         job = self.job(uid, ref_id)
         now = datetime.now(UTC)
@@ -114,11 +114,15 @@ class Repository:
                 return old
             if old["revision"] != edit.revision:
                 raise HTTPException(409, "A referência mudou. Atualize antes de editar")
+            changes = {"title": edit.title, "revision": old["revision"] + 1,
+                       "updated_at": now, "content_hash": digest,
+                       "last_mutation_id": mutation_id}
+            if edit.kind == "link":
+                tx.update(doc, changes)
+                return {**old, **changes}
             reserve_operation(self.db, uid, tx, now=now,
                               media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
-            changes = {"title": edit.title, "text": edit.text, "revision": old["revision"] + 1,
-                       "updated_at": now, "status": "queued", "analysis": None,
-                       "content_hash": digest, "last_mutation_id": mutation_id}
+            changes.update({"text": edit.text, "status": "queued", "analysis": None})
             tx.update(doc, changes)
             tx.set(job, new_job(uid, ref_id, changes["revision"], now))
             return {**old, **changes}

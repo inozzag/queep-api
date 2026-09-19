@@ -10,12 +10,13 @@ from uuid import uuid4
 import httpx
 from fastapi import HTTPException
 from firebase_admin import auth
-from google.api_core.exceptions import NotFound
+from google.api_core.exceptions import GoogleAPICallError, NotFound, PreconditionFailed
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from queep.account_state import deletion_document
+from queep.account_state import deletion_document, require_open
 from queep.config import firebase_app
+from queep.images import Images, prepare
 from queep.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -157,6 +158,9 @@ class Accounts:
         more = self.erase_batch(self.db.collection("jobs").where(
             filter=FieldFilter("uid", "==", uid)))
         root = self.db.collection("users").document(uid)
+        profile = root.get().to_dict() or {}
+        if prefix := profile.get("avatar_prefix"):
+            self.delete_avatar_objects(uid, prefix)
         for name in ("references", "usage"):
             more = self.erase_batch(root.collection(name)) or more
         root.delete()
@@ -166,17 +170,14 @@ class Accounts:
             filter=FieldFilter("uid", "==", uid)).limit(50).stream())
         for snapshot in uploads:
             upload = snapshot.to_dict()
-            expected = f"images/v1/{self.repo.job(uid, upload['reference_id']).id}/"
-            prefix = upload["prefix"]
-            if (not prefix.startswith(expected)
-                    or not re.fullmatch(r"[a-f0-9]{64}", prefix[len(expected):])):
-                raise RuntimeError("Invalid image reservation")
-            # Keep the reservation until existing writers have had time to stop.
-            for name in ("original", "thumbnail"):
-                try:
-                    self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
-                except NotFound:
-                    pass
+            job_id = self.repo.job(uid, upload["reference_id"]).id
+            for prefix in Images.object_prefixes(job_id, upload):
+                # Keep the reservation until existing writers have had time to stop.
+                for name in ("original", "thumbnail"):
+                    try:
+                        self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
+                    except NotFound:
+                        pass
             if request["settle_at"] <= now:
                 snapshot.reference.delete()
         more = len(uploads) == 50 or more
@@ -223,3 +224,99 @@ class Accounts:
         pending = self.db.collection("account_deletions").where(
             filter=FieldFilter("retry_after", "<=", now)).order_by("retry_after").limit(limit)
         return sum(self.resume(doc.to_dict()["uid"], now) for doc in pending.stream())
+
+    def avatar_key(self, uid):
+        return hashlib.sha256(uid.encode()).hexdigest()
+
+    def avatar_prefix(self, uid, sha256):
+        return f"avatars/v1/{self.avatar_key(uid)}/{sha256}"
+
+    def validate_avatar_prefix(self, uid, prefix):
+        expected = f"avatars/v1/{self.avatar_key(uid)}/"
+        rest = prefix[len(expected):] if prefix.startswith(expected) else ""
+        if not rest or not re.fullmatch(r"[a-f0-9]{64}", rest):
+            raise RuntimeError("Invalid avatar prefix")
+
+    def put_object(self, path, data, content_type):
+        blob = self.bucket.blob(path)
+        blob.cache_control = "private, no-store"
+        try:
+            blob.upload_from_string(
+                data, content_type=content_type, if_generation_match=0,
+                timeout=30, retry=None, checksum="crc32c")
+        except PreconditionFailed:
+            pass
+
+    def delete_avatar_objects(self, uid, prefix):
+        self.validate_avatar_prefix(uid, prefix)
+        for name in ("original", "thumbnail"):
+            try:
+                self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
+            except NotFound:
+                pass
+
+    def put_avatar(self, uid, data):
+        image = prepare(data)
+        prefix = self.avatar_prefix(uid, image.info.sha256)
+        require_open(self.db, uid)
+        try:
+            for name, content, content_type in (
+                ("original", image.original, image.info.content_type),
+                ("thumbnail", image.thumbnail, image.info.content_type),
+            ):
+                self.put_object(f"{prefix}/{name}", content, content_type)
+        except GoogleAPICallError as error:
+            raise HTTPException(503, "Upload não confirmado. Tente novamente") from error
+        root = self.db.collection("users").document(uid)
+        now = datetime.now(UTC)
+        previous = {"prefix": None}
+
+        @firestore.transactional
+        def write(tx):
+            require_open(self.db, uid, tx)
+            current = root.get(transaction=tx).to_dict() or {}
+            previous["prefix"] = current.get("avatar_prefix")
+            tx.set(root, {"avatar": image.info.model_dump(), "avatar_prefix": prefix,
+                          "avatar_updated_at": now}, merge=True)
+            return image.info.model_dump()
+
+        result = self.repo.transact(write)
+        old = previous["prefix"]
+        if old and old != prefix:
+            self.delete_avatar_objects(uid, old)
+        return result
+
+    def get_avatar(self, uid, thumbnail=False):
+        require_open(self.db, uid)
+        record = self.db.collection("users").document(uid).get().to_dict() or {}
+        info = record.get("avatar") or {}
+        prefix = record.get("avatar_prefix")
+        if not info or not prefix:
+            return None
+        self.validate_avatar_prefix(uid, prefix)
+        name = "thumbnail" if thumbnail else "original"
+        try:
+            data = self.bucket.blob(f"{prefix}/{name}").download_as_bytes(timeout=20, retry=None)
+        except NotFound as error:
+            raise HTTPException(404, "Foto de perfil não encontrada") from error
+        except GoogleAPICallError as error:
+            raise HTTPException(503, "Não foi possível carregar a foto") from error
+        return data, info.get("content_type", "image/jpeg")
+
+    def delete_avatar(self, uid):
+        root = self.db.collection("users").document(uid)
+        previous = {"prefix": None}
+
+        @firestore.transactional
+        def write(tx):
+            require_open(self.db, uid, tx)
+            current = root.get(transaction=tx).to_dict() or {}
+            previous["prefix"] = current.get("avatar_prefix")
+            if not current:
+                return
+            tx.set(root, {"avatar": firestore.DELETE_FIELD, "avatar_prefix": firestore.DELETE_FIELD,
+                          "avatar_updated_at": firestore.DELETE_FIELD}, merge=True)
+
+        self.repo.transact(write)
+        if prefix := previous["prefix"]:
+            self.delete_avatar_objects(uid, prefix)

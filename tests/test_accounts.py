@@ -215,6 +215,27 @@ def test_cloud_rollout_gate_does_not_accept_new_deletions(client, account, monke
     assert not deletion_document(database(), uid).get().exists
 
 
+def test_avatar_round_trip_survives_replace_and_is_removed_with_the_account(client, account, service):
+    uid, headers = account
+    assert client.get("/v1/account/avatar", headers=headers).status_code == 204
+    first = client.put("/v1/account/avatar", content=png(), headers=headers)
+    assert first.status_code == 200
+    assert first.json()["content_type"] in ("image/png", "image/jpeg")
+    fetched = client.get("/v1/account/avatar", params={"thumbnail": False}, headers=headers)
+    assert fetched.status_code == 200 and fetched.content
+    second = client.put("/v1/account/avatar", content=png(), headers=headers)
+    assert second.status_code == 200
+    prefix = database().collection("users").document(uid).get().to_dict()["avatar_prefix"]
+    assert prefix.startswith(f"avatars/v1/")
+    assert client.delete("/v1/account/avatar", headers=headers).status_code == 204
+    assert client.get("/v1/account/avatar", headers=headers).status_code == 204
+    client.put("/v1/account/avatar", content=png(), headers=headers)
+    prefix = database().collection("users").document(uid).get().to_dict()["avatar_prefix"]
+    service.request(uid, immediate=True)
+    complete(service, uid)
+    assert not list(service.bucket.list_blobs(prefix=prefix))
+
+
 def test_provider_requirement_cannot_disappear_with_runtime_config(account, service):
     uid = account[0]
     service.settings.revenuecat_project_id = "original-project"

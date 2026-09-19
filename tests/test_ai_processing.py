@@ -8,12 +8,12 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, SPACE, AIError, document
+from queep.ai import AI, SPACE, AIError, document, generated_title, headline_title
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
 from queep.main import app as public_app
-from queep.models import Capture, Edit, Interpretation, SourceContent
+from queep.models import Capture, Edit, ImageInfo, Interpretation, SourceContent
 from queep.repository import Repository
 from queep.search import search
 from queep.worker import app as worker_app
@@ -218,7 +218,8 @@ def test_explicit_media_kind_rejects_inconsistent_model_selection(library):
 def source_fixture():
     return SourceContent(state="read", title="HTTPX", url="https://github.com/encode/httpx",
                          text="HTTPX is a Python HTTP client with synchronous and async APIs.",
-                         fetched_at=datetime.now(UTC), limitations=["Somente texto acessível."])
+                         fetched_at=datetime.now(UTC), native_title=True,
+                         limitations=["Somente texto acessível."])
 
 
 def test_link_content_reaches_ai_embedding_verification_and_persistence(library):
@@ -282,6 +283,577 @@ def test_unavailable_source_still_becomes_searchable_from_user_context(library):
     assert repo.get(uid, ref.id).source.state == "unavailable"
 
 
+def test_post_photo_is_stored_and_sent_to_interpreter(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(
+        uid,
+        str(uuid4()),
+        Capture(kind="link", url="https://x.com/richardrx/status/2099853605054316775"),
+    )
+    photo = picture()
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("store", data))
+            return ImageInfo(
+                sha256="a" * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    photos = Photos()
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: photo)
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(("interpret", data)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), "https://pbs.twimg.com/media/abc.jpg"
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, photos, reader) == "ready"
+    assert seen[0] == ("store", photo) and seen[1] == ("interpret", [photo])
+    stored = repo.get(uid, ref.id)
+    assert stored.kind == "link" and stored.image and stored.image.width == 900
+
+
+def test_post_carousel_photos_are_stored_in_order(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(
+        uid,
+        str(uuid4()),
+        Capture(kind="link", url="https://x.com/jenidesignns/status/2099804636328648823"),
+    )
+    first, second = picture("white"), picture("red")
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("store", data))
+            return ImageInfo(
+                sha256=("a" if data == first else "b") * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    photos = Photos()
+    monkeypatch.setattr(
+        "queep.worker.read_photo",
+        lambda url: first if url.endswith("one.jpg") else second,
+    )
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(("interpret", data)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/one.jpg",
+            "https://pbs.twimg.com/media/two.jpg",
+        ]
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, photos, reader) == "ready"
+    assert seen[0] == ("store", first) and seen[1] == ("store", second)
+    assert seen[2] == ("interpret", [first, second])
+    stored = repo.get(uid, ref.id)
+    assert stored.image.sha256 == "a" * 64
+    assert [item.sha256 for item in stored.images] == ["a" * 64, "b" * 64]
+
+
+def test_post_video_poster_is_marked_and_sent_to_interpreter(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(
+        uid,
+        str(uuid4()),
+        Capture(kind="link", url="https://x.com/a/status/2099804636328648823"),
+    )
+    poster = picture("blue")
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("store", preview_kind, data))
+            return ImageInfo(
+                sha256="v" * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+                preview_kind=preview_kind,
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: poster)
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(("interpret", data)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [{
+            "url": "https://pbs.twimg.com/ext_tw_video_thumb/poster.jpg",
+            "kind": "video",
+        }]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert seen[0][:2] == ("store", "video") and seen[1] == ("interpret", [poster])
+    stored = repo.get(uid, ref.id)
+    assert stored.images[0].preview_kind == "video"
+
+
+def test_post_photos_are_interpreted_when_tweet_text_is_missing(library):
+    from tests.test_images import picture
+
+    repo, _, uid, _ = library
+    fallback = SourceContent(
+        content_kind="metadata", state="read", url="https://x.com/yurygok/status/1",
+        title="Post", text="", fetched_at=datetime.now(UTC),
+        limitations=[
+            "Foi lido o conteúdo público do post; o texto completo pode estar indisponível.",
+        ],
+    )
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/yurygok/status/1"))
+    ref = ref.model_copy(update={"source": fallback})
+    analysis = Interpretation(summary="Mesa de mixer com faders coloridos", coverage="partial",
+                              appearance=["mesa de som digital", "faders verde roxo e rosa"],
+                              headline="Mesa mixer faders coloridos")
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": analysis.model_dump_json()}}]})
+    result = ai.interpret(ref, [picture()])
+    payload = json.dumps(calls[0]["messages"][1]["content"])
+    assert "image_url" in payload
+    assert result.appearance == analysis.appearance
+    assert "mesa de som digital" in document(ref, result)
+
+
+def test_gallery_interpretation_ignores_extra_keys_and_clips_appearance(library):
+    from tests.test_images import picture
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    analysis = Interpretation(
+        summary="Três telas de um produto", coverage="partial",
+        appearance=["ok"], headline="Telas de um produto digital")
+    payload = analysis.model_dump()
+    payload["photos"] = ["https://example.test/1.jpg"]
+    payload["appearance"] = ["x" * 600]
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps(payload)}}]})
+    result = ai.interpret(ref, [picture("white"), picture("red")])
+    assert calls[0]["max_tokens"] == 1536
+    images = [
+        part for part in calls[0]["messages"][1]["content"] if part.get("type") == "image_url"]
+    assert len(images) == 2
+    assert result.appearance == ["x" * 500]
+    assert result.headline == "Telas de um produto digital"
+
+
+def test_unreadable_gallery_frame_is_skipped(library):
+    from tests.test_images import picture
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    analysis = Interpretation(summary="Uma tela escura", coverage="partial")
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": analysis.model_dump_json()}}]})
+    result = ai.interpret(ref, [b"not-an-image", picture()])
+    images = [
+        part for part in calls[0]["messages"][1]["content"] if part.get("type") == "image_url"]
+    assert len(images) == 1
+    assert result.summary == "Uma tela escura"
+
+
+def test_generated_title_uses_image_headline_not_url_or_post():
+    visual = Interpretation(
+        summary="https://x.com/yurygok/status/1",
+        headline="Mesa mixer faders coloridos",
+        coverage="partial",
+        appearance=["mesa de som digital"],
+    )
+    assert generated_title(visual) == "Mesa mixer faders coloridos"
+    assert headline_title("Post") == ""
+    assert headline_title("https://x.com/yurygok/status/1") == ""
+    untitled = Interpretation(summary="Post", coverage="partial",
+                              appearance=["mesa de som digital", "faders verde"])
+    assert generated_title(untitled) == "mesa de som digital; faders verde"
+
+
+def test_library_title_keeps_native_network_title(library):
+    from queep.worker import library_title
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://youtu.be/dQw4w9WgXcQ"))
+    source = SourceContent(
+        content_kind="metadata", state="read", url=ref.url or "", title="Official video",
+        text="Título: Official video", fetched_at=datetime.now(UTC), native_title=True,
+        limitations=["Somente título e autor públicos foram lidos."])
+    ref = ref.model_copy(update={"source": source})
+    analysis = Interpretation(summary="Um clipe famoso", headline="Clipe de rick astley",
+                              coverage="partial")
+    assert library_title(ref, analysis, []) == "Official video"
+
+
+def test_library_title_skips_posts_without_text_or_media(library):
+    from queep.worker import library_title
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    source = SourceContent(
+        content_kind="metadata", state="read", url=ref.url or "", title="Ada",
+        text="", fetched_at=datetime.now(UTC), native_title=False, author_name="Ada",
+        author_handle="ada", limitations=["Foi lido o autor público do post."])
+    ref = ref.model_copy(update={"source": source})
+    analysis = Interpretation(summary="Ada", headline="Post sem conteúdo", coverage="partial")
+    assert library_title(ref, analysis, []) is None
+    assert library_title(ref, analysis, [b"frame"]) == "Post sem conteúdo"
+
+
+def test_library_title_uses_ai_when_network_has_no_native_title(library):
+    from queep.worker import library_title
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    source = SourceContent(
+        content_kind="metadata", state="read", url=ref.url or "", title="Ada",
+        text="Um mixer no estúdio com faders coloridos", fetched_at=datetime.now(UTC),
+        native_title=False, author_name="Ada", author_handle="ada",
+        limitations=["Foi lido o texto público do post."])
+    ref = ref.model_copy(update={"source": source})
+    analysis = Interpretation(summary="Mixer no estúdio", headline="Mixer colorido no estúdio",
+                              coverage="partial")
+    assert library_title(ref, analysis, []) == "Mixer colorido no estúdio"
+
+
+def test_library_title_never_names_a_profile(library):
+    from queep.worker import library_title
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/ada"))
+    source = SourceContent(
+        content_kind="profile", state="read", url=ref.url or "", title="Ada Lovelace",
+        text="Notas sobre computacao.", fetched_at=datetime.now(UTC), native_title=True,
+        author_name="Ada Lovelace", author_handle="ada")
+    ref = ref.model_copy(update={"source": source})
+    analysis = Interpretation(summary="Bio de ada", headline="Notas sobre computacao pura",
+                              coverage="full")
+    assert library_title(ref, analysis, []) is None
+
+
+def test_library_title_strips_product_name_from_website_headline(library):
+    from queep.worker import library_title
+
+    repo, _, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://cursor.com"))
+    source = SourceContent(
+        content_kind="page", state="read", url=ref.url or "", title="Cursor",
+        text="Editor de codigo com agentes para times.", fetched_at=datetime.now(UTC),
+        native_title=False, limitations=["Somente texto acessível."])
+    ref = ref.model_copy(update={"source": source})
+    analysis = Interpretation(
+        summary="Editor de codigo com agentes",
+        headline="Cursor: Editor de codigo com agentes",
+        coverage="partial")
+    assert library_title(ref, analysis, []) == "Editor de codigo com agentes"
+
+
+def test_process_stores_profile_avatar_without_gallery_or_title(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/ada"))
+    avatar = picture("green")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append("author")
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append("gallery")
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data))
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda url: avatar)
+    ai = SimpleNamespace(
+        interpret=lambda ref, data=None: seen.append(("interpret", data, ref.source.text))
+        or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="profile", state="read", url="https://x.com/ada",
+            title="Ada", text="Bio curta.", fetched_at=datetime.now(UTC),
+            native_title=True, author_name="Ada", author_handle="ada",
+        ), [
+            {"url": "https://pbs.twimg.com/profile_images/ada.jpg", "kind": "avatar"},
+            {"url": "https://pbs.twimg.com/media/one.jpg", "kind": "photo"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen == ["author", ("interpret", None, "Bio curta.")]
+    assert stored.author_image.sha256 == "b" * 64
+    assert stored.images is None
+    assert stored.title == ""
+    assert stored.source.content_kind == "profile"
+
+
+def test_process_stores_dribbble_avatar_outside_profile_gallery(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://dribbble.com/ada"))
+    avatar = picture("green")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append(("author", data))
+            return ImageInfo(
+                sha256="d" * 64,
+                content_type="image/jpeg",
+                width=400,
+                height=400,
+                byte_count=len(data),
+            )
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("gallery", data))
+            return ImageInfo(
+                sha256="e" * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image", lambda url: avatar)
+    ai = SimpleNamespace(
+        interpret=lambda ref, data=None: seen.append(("interpret", data, ref.source.text))
+        or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="profile",
+            state="read",
+            url="https://dribbble.com/ada",
+            title="Ada Lovelace",
+            text="Design de produtos digitais.",
+            fetched_at=datetime.now(UTC),
+            native_title=True,
+            author_name="Ada Lovelace",
+            author_handle="ada",
+        ), [
+            {"url": "https://cdn.dribbble.com/avatar.png", "kind": "avatar"},
+            {"url": "https://cdn.dribbble.com/shot.png", "kind": "photo"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen == [
+        ("author", avatar),
+        ("interpret", None, "Design de produtos digitais."),
+    ]
+    assert stored.author_image.sha256 == "d" * 64
+    assert stored.images is None and stored.title == ""
+    assert stored.source.content_kind == "profile"
+
+
+def test_process_skips_profile_interpretation_without_bio(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/ada"))
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda url: picture())
+    ai = SimpleNamespace(
+        interpret=lambda *_: seen.append("interpret") or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="profile", state="read", url="https://x.com/ada",
+            title="Ada", text="", fetched_at=datetime.now(UTC),
+            native_title=True, author_name="Ada", author_handle="ada",
+        ), [{"url": "https://pbs.twimg.com/profile_images/ada.jpg", "kind": "avatar"}]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert "interpret" not in seen
+    assert stored.analysis.topics == []
+    assert stored.analysis.limitations == ["O perfil não tem bio pública para analisar."]
+    assert stored.title == ""
+
+
+def test_post_visuals_reach_embedding_and_verification(library, monkeypatch):
+    from queep.sources import tweet_photo_fallback
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://x.com/yurygok/status/2100117746117673043"))
+    analysis = Interpretation(summary="Mesa de mixer com faders coloridos", coverage="partial",
+                              appearance=["mesa de som digital", "faders verde roxo e rosa"],
+                              headline="Mesa mixer faders coloridos")
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": analysis.model_dump_json()}}]})
+    documents = []
+    ai.embed = lambda text: documents.append(text) or VECTOR
+    photo = picture()
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data))
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: photo)
+
+    def reader(_url):
+        url = "https://x.com/yurygok/status/2100117746117673043"
+        return tweet_photo_fallback(url, ["https://pbs.twimg.com/media/mixer.jpg"]), [
+            "https://pbs.twimg.com/media/mixer.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert "image_url" in json.dumps(calls[0]["messages"][1]["content"])
+    assert "mesa de som digital" in documents[0]
+    stored = repo.get(uid, ref.id)
+    assert stored.title == "Mesa mixer faders coloridos"
+    verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": "any", "ids": [stored.id]})}}]})
+    assert verifier.verify("mesa de mixer com faders", [stored]) == [stored.id]
+    candidate = json.loads(requests[0]["messages"][1]["content"])["candidates"][0]
+    assert candidate["image_description"]["appearance"] == ["mesa de som digital",
+                                                            "faders verde roxo e rosa"]
+
+
+def test_process_stores_author_avatar_outside_gallery(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/ada/status/1"))
+    photo = picture()
+    avatar = picture("green")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append("author")
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append("gallery")
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data))
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo",
+                        lambda url: avatar if "profile" in url else photo)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={
+            "content_kind": "metadata", "native_title": False, "title": "Ada",
+        }), [
+            {"url": "https://pbs.twimg.com/profile_images/ada.jpg", "kind": "avatar"},
+            {"url": "https://pbs.twimg.com/media/one.jpg", "kind": "photo"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen == ["author", "gallery"]
+    assert stored.author_image.sha256 == "b" * 64
+    assert stored.images[0].sha256 == "a" * 64
+
+
+def test_first_video_clip_speech_reaches_interpreter(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    poster = picture("blue")
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            return ImageInfo(sha256="v" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data),
+                             preview_kind=preview_kind)
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: poster)
+    monkeypatch.setattr(
+        "queep.worker.read_social_clip", lambda url: seen.append(("clip", url)) or b"mp4")
+    monkeypatch.setattr("queep.worker.social_evidence", lambda data: SimpleNamespace(
+        audio=b"mp3", frames=[(0.2, poster)]))
+    ai = SimpleNamespace(
+        transcribe_speech=lambda audio: seen.append(("speech", audio)) or "fala do autor",
+        interpret=lambda ref, data=None: seen.append(("interpret", ref.transcript)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={
+            "content_kind": "metadata", "native_title": False, "title": "Ada",
+        }), [{
+            "url": "https://pbs.twimg.com/ext_tw_video_thumb/poster.jpg",
+            "kind": "video",
+            "clip_url": "https://video.twimg.com/amplify_video/clip.mp4",
+        }]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert ("clip", "https://video.twimg.com/amplify_video/clip.mp4") in seen
+    assert ("speech", b"mp3") in seen
+    assert ("interpret", "fala do autor") in seen
+    assert repo.get(uid, ref.id).transcript == "fala do autor"
+
+
 @pytest.mark.parametrize("kind", ["link", "image"])
 def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     *_, ref = library
@@ -297,3 +869,315 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     assert ai.verify("Encontre uma referência", refs) == []
     assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
+
+
+def test_process_stores_site_preview_without_vision_frames(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://cursor.com"))
+    favicon = picture("green")
+    preview = picture("blue")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append("author")
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append("gallery")
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data))
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image",
+                        lambda url: favicon if "favicon" in url else preview)
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(("interpret", data)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="page", state="read", url="https://cursor.com", title="Cursor",
+            text="Editor de codigo com agentes para times de produto.",
+            fetched_at=datetime.now(UTC), native_title=False,
+            limitations=["Somente texto acessível."],
+        ), [
+            {"url": "https://cursor.com/og.png", "kind": "photo"},
+            {"url": "https://cursor.com/favicon.png", "kind": "avatar"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen[:2] == ["author", "gallery"]
+    assert seen[2] == ("interpret", None)
+    assert stored.author_image.sha256 == "b" * 64
+    assert stored.images[0].sha256 == "a" * 64
+    assert stored.source.title == "Cursor"
+
+
+def test_process_stores_instagram_carousel_and_reel_clip(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://www.instagram.com/p/mix1/"))
+    photo = picture()
+    poster = picture("blue")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append("author")
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("gallery", preview_kind))
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data),
+                             preview_kind=preview_kind)
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image",
+                        lambda url: poster if "poster" in url or "b.jpg" in url else photo)
+    monkeypatch.setattr(
+        "queep.worker.read_public_clip",
+        lambda url: seen.append(("clip", url)) or b"mp4",
+    )
+    monkeypatch.setattr("queep.worker.social_evidence", lambda data: SimpleNamespace(
+        audio=b"mp3", frames=[(0.2, poster)]))
+    ai = SimpleNamespace(
+        transcribe_speech=lambda audio: seen.append(("speech", audio)) or "fala do reel",
+        interpret=lambda ref, data=None: seen.append(("interpret", ref.transcript)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="metadata", state="read", url="https://www.instagram.com/p/mix1/",
+            title="Ada", text="Foto e um clip.", fetched_at=datetime.now(UTC),
+            native_title=False, author_name="Ada", author_handle="ada",
+            limitations=["Foi lido o texto público e até 4 mídias."],
+        ), [
+            {"url": "https://scontent.cdninstagram.com/avatar.jpg", "kind": "avatar"},
+            {"url": "https://scontent.cdninstagram.com/a.jpg", "kind": "photo"},
+            {"url": "https://scontent.cdninstagram.com/poster.jpg", "kind": "video",
+             "clip_url": "https://scontent.cdninstagram.com/reel.mp4"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert ("clip", "https://scontent.cdninstagram.com/reel.mp4") in seen
+    assert ("speech", b"mp3") in seen
+    assert ("interpret", "fala do reel") in seen
+    assert ("gallery", "photo") in seen and ("gallery", "video") in seen
+    assert stored.author_image.sha256 == "b" * 64
+    assert stored.transcript == "fala do reel"
+
+
+def test_process_stores_behance_gallery_and_clip(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(
+        uid, str(uuid4()), Capture(kind="link", url="https://www.behance.net/gallery/123/Mixer")
+    )
+    photo = picture()
+    poster = picture("blue")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append("author")
+            return ImageInfo(sha256="b" * 64, content_type="image/jpeg",
+                             width=400, height=400, byte_count=len(data))
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("gallery", preview_kind))
+            return ImageInfo(sha256="a" * 64, content_type="image/jpeg",
+                             width=900, height=600, byte_count=len(data),
+                             preview_kind=preview_kind)
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image",
+                        lambda url: poster if "poster" in url else photo)
+    monkeypatch.setattr(
+        "queep.worker.read_public_clip",
+        lambda url: seen.append(("clip", url)) or b"mp4",
+    )
+    monkeypatch.setattr("queep.worker.social_evidence", lambda data: SimpleNamespace(
+        audio=b"mp3", frames=[(0.2, poster)]))
+    ai = SimpleNamespace(
+        transcribe_speech=lambda audio: seen.append(("speech", audio)) or "fala do projeto",
+        interpret=lambda ref, data=None: seen.append(("interpret", ref.transcript)) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="metadata", state="read",
+            url="https://www.behance.net/gallery/123/Mixer",
+            title="Ada", text="Foto e um clip.", fetched_at=datetime.now(UTC),
+            native_title=False, author_name="Ada", author_handle="ada",
+            limitations=["Foi lido o texto público e até 4 mídias."],
+        ), [
+            {"url": "https://pps.services.adobe.com/avatar.jpg", "kind": "avatar"},
+            {"url": "https://mir-s3-cdn-cf.behance.net/project_modules/1400/one.png",
+             "kind": "photo"},
+            {"url": "https://mir-s3-cdn-cf.behance.net/project_modules/1400/poster.png",
+             "kind": "video", "clip_url": "https://cdn-prod-ccv.adobe.com/clip.mp4"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert ("clip", "https://cdn-prod-ccv.adobe.com/clip.mp4") in seen
+    assert ("speech", b"mp3") in seen
+    assert ("interpret", "fala do projeto") in seen
+    assert ("gallery", "photo") in seen and ("gallery", "video") in seen
+    assert stored.author_image.sha256 == "b" * 64
+    assert stored.transcript == "fala do projeto"
+
+
+def test_process_stores_behance_avatar_outside_profile_gallery(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://www.behance.net/ada"))
+    avatar = picture("green")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append(("author", data))
+            return ImageInfo(
+                sha256="d" * 64,
+                content_type="image/jpeg",
+                width=400,
+                height=400,
+                byte_count=len(data),
+            )
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("gallery", data))
+            return ImageInfo(
+                sha256="e" * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image", lambda url: avatar)
+    ai = SimpleNamespace(
+        interpret=lambda ref, data=None: seen.append(("interpret", data, ref.source.text))
+        or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="profile",
+            state="read",
+            url="https://www.behance.net/ada",
+            title="Ada Lovelace",
+            text="Design de produtos digitais.",
+            fetched_at=datetime.now(UTC),
+            native_title=True,
+            author_name="Ada Lovelace",
+            author_handle="ada",
+        ), [
+            {"url": "https://pps.services.adobe.com/avatar.jpg", "kind": "avatar"},
+            {"url": "https://mir-s3-cdn-cf.behance.net/projects/404/cover.png", "kind": "photo"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen == [
+        ("author", avatar),
+        ("interpret", None, "Design de produtos digitais."),
+    ]
+    assert stored.author_image.sha256 == "d" * 64
+    assert stored.images is None and stored.title == ""
+    assert stored.source.content_kind == "profile"
+
+
+def test_process_stores_pinterest_avatar_outside_profile_gallery(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(
+        uid,
+        str(uuid4()),
+        Capture(kind="link", url="https://www.pinterest.com/ada_design/"),
+    )
+    avatar = picture("green")
+    seen = []
+
+    class Photos:
+        def attach_author(self, uid, ref_id, data):
+            seen.append(("author", data))
+            return ImageInfo(
+                sha256="f" * 64,
+                content_type="image/jpeg",
+                width=400,
+                height=400,
+                byte_count=len(data),
+            )
+
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+            seen.append(("gallery", data))
+            return ImageInfo(
+                sha256="a" * 64,
+                content_type="image/jpeg",
+                width=900,
+                height=600,
+                byte_count=len(data),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem nao encontrada")
+
+    monkeypatch.setattr("queep.worker.read_public_image", lambda url: avatar)
+    ai = SimpleNamespace(
+        interpret=lambda ref, data=None: seen.append(("interpret", data, ref.source.text))
+        or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="profile",
+            state="read",
+            url="https://www.pinterest.com/ada_design/",
+            title="Ada Lovelace",
+            text="Design de produtos digitais.",
+            fetched_at=datetime.now(UTC),
+            native_title=True,
+            author_name="Ada Lovelace",
+            author_handle="ada_design",
+        ), [
+            {"url": "https://i.pinimg.com/280x280_RS/avatar.jpg", "kind": "avatar"},
+            {"url": "https://i.pinimg.com/736x/pin.jpg", "kind": "photo"},
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert seen == [
+        ("author", avatar),
+        ("interpret", None, "Design de produtos digitais."),
+    ]
+    assert stored.author_image.sha256 == "f" * 64
+    assert stored.images is None and stored.title == ""
+    assert stored.source.content_kind == "profile"

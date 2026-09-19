@@ -2,6 +2,7 @@
 
 import hashlib
 import logging
+import re
 import warnings
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from queep.repository import Repository, fingerprint, new_job
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
+MAX_GALLERY = 4
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 logger = logging.getLogger(__name__)
 
@@ -82,6 +84,26 @@ def prepare(data: bytes) -> PreparedImage:
         raise HTTPException(415, "Não foi possível ler esta imagem. Escolha JPEG ou PNG") from error
 
 
+def as_jpeg(data: bytes) -> bytes:
+    with Image.open(BytesIO(data)) as source:
+        source.load()
+        rgb = ImageOps.exif_transpose(source).convert("RGB")
+        buffer = BytesIO()
+        rgb.save(buffer, format="JPEG", quality=90)
+        return buffer.getvalue()
+
+
+def as_stored_image(data: bytes) -> bytes:
+    """Keep JPEG/PNG; convert ICO/WEBP so prepare() can store the preview."""
+    try:
+        with Image.open(BytesIO(data)) as source:
+            if source.format in {"JPEG", "PNG"} and getattr(source, "n_frames", 1) == 1:
+                return data
+        return as_jpeg(data)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return data
+
+
 class Images:
     prepare = staticmethod(prepare)
 
@@ -105,6 +127,18 @@ class Images:
 
     def prefix(self, uid, ref_id, sha256):
         return f"images/v1/{self.repo.job(uid, ref_id).id}/{sha256}"
+
+    @staticmethod
+    def object_prefixes(job_id, upload):
+        expected = f"images/v1/{job_id}/"
+        prefixes = list(upload.get("prefixes") or [])
+        if upload.get("prefix") and upload["prefix"] not in prefixes:
+            prefixes.append(upload["prefix"])
+        for prefix in prefixes:
+            rest = prefix[len(expected):]
+            if not prefix.startswith(expected) or not re.fullmatch(r"[a-f0-9]{64}", rest):
+                raise RuntimeError("Invalid image reservation")
+        return prefixes
 
     def reserve(self, uid, ref_id, title, image):
         doc = self.repo.collection(uid).document(ref_id)
@@ -226,19 +260,125 @@ class Images:
                 self.cleanup(uid, ref_id)  # Also handles a late writer racing deletion/expiry.
             raise
 
-    def read(self, uid, ref_id, thumbnail=False):
+    def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
+        """Store a public post photo or video poster without changing the link kind."""
+        kind = preview_kind if preview_kind in ("photo", "video") else "photo"
+        try:
+            image = self.prepare(data)
+        except HTTPException:
+            image = self.prepare(as_jpeg(data))
+        info = image.info.model_copy(update={"preview_kind": kind})
+        prefix = self.prefix(uid, ref_id, image.info.sha256)
+        for name, content, content_type in self.objects(image):
+            self.put_object(f"{prefix}/{name}", content, content_type)
+        now = datetime.now(UTC)
+        manifest = self.manifest(uid, ref_id)
+        doc = self.repo.collection(uid).document(ref_id)
+
+        @firestore.transactional
+        def write(tx):
+            require_open(self.db, uid, tx)
+            record = doc.get(transaction=tx).to_dict()
+            if not record or record.get("deleted") or record.get("kind") != "link":
+                raise HTTPException(409, "Referência indisponível")
+            gallery = list(record.get("images") or [])
+            if not gallery and record.get("image"):
+                gallery = [record["image"]]
+            for item in gallery:
+                if item.get("sha256") == image.info.sha256:
+                    return ImageInfo.model_validate(item)
+            if len(gallery) >= MAX_GALLERY:
+                return ImageInfo.model_validate(gallery[-1])
+            gallery.append(info.model_dump())
+            upload = manifest.get(transaction=tx).to_dict()
+            prefixes = list((upload or {}).get("prefixes") or [])
+            if (upload or {}).get("prefix") and upload["prefix"] not in prefixes:
+                prefixes.append(upload["prefix"])
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+            if not upload:
+                tx.set(manifest, {
+                    "uid": uid,
+                    "reference_id": ref_id,
+                    "digest": image.info.sha256,
+                    "state": "active",
+                    "prefix": prefixes[0],
+                    "prefixes": prefixes,
+                    "settle_at": now + timedelta(minutes=10),
+                })
+            else:
+                tx.update(manifest, {"prefix": prefixes[0], "prefixes": prefixes})
+            tx.update(doc, {"image": gallery[0], "images": gallery, "updated_at": now})
+            return info
+
+        return self.repo.transact(write)
+
+    def attach_author(self, uid, ref_id, data):
+        """Store the public author avatar on a link without mixing it into the post gallery."""
+        try:
+            image = self.prepare(data)
+        except HTTPException:
+            image = self.prepare(as_jpeg(data))
+        info = image.info
+        prefix = self.prefix(uid, ref_id, image.info.sha256)
+        for name, content, content_type in self.objects(image):
+            self.put_object(f"{prefix}/{name}", content, content_type)
+        now = datetime.now(UTC)
+        manifest = self.manifest(uid, ref_id)
+        doc = self.repo.collection(uid).document(ref_id)
+
+        @firestore.transactional
+        def write(tx):
+            require_open(self.db, uid, tx)
+            record = doc.get(transaction=tx).to_dict()
+            if not record or record.get("deleted") or record.get("kind") != "link":
+                raise HTTPException(409, "Referência indisponível")
+            current = record.get("author_image")
+            if current and current.get("sha256") == image.info.sha256:
+                return ImageInfo.model_validate(current)
+            upload = manifest.get(transaction=tx).to_dict()
+            prefixes = list((upload or {}).get("prefixes") or [])
+            if (upload or {}).get("prefix") and upload["prefix"] not in prefixes:
+                prefixes.append(upload["prefix"])
+            if prefix not in prefixes:
+                prefixes.append(prefix)
+            if not upload:
+                tx.set(manifest, {
+                    "uid": uid,
+                    "reference_id": ref_id,
+                    "digest": image.info.sha256,
+                    "state": "active",
+                    "prefix": prefixes[0],
+                    "prefixes": prefixes,
+                    "settle_at": now + timedelta(minutes=10),
+                })
+            else:
+                tx.update(manifest, {"prefix": prefixes[0], "prefixes": prefixes})
+            tx.update(doc, {"author_image": info.model_dump(), "updated_at": now})
+            return info
+
+        return self.repo.transact(write)
+
+    def read(self, uid, ref_id, thumbnail=False, index=0, role="gallery"):
         reference = self.repo.get(uid, ref_id)
-        if not reference.image:
-            raise HTTPException(404, "Imagem não encontrada")
+        if role == "author":
+            info = reference.author_image
+            if not info:
+                raise HTTPException(404, "Imagem não encontrada")
+        else:
+            gallery = reference.images or ([reference.image] if reference.image else [])
+            if not gallery or index < 0 or index >= len(gallery):
+                raise HTTPException(404, "Imagem não encontrada")
+            info = gallery[index]
         name = "thumbnail" if thumbnail else "original"
-        path = f"{self.prefix(uid, ref_id, reference.image.sha256)}/{name}"
+        path = f"{self.prefix(uid, ref_id, info.sha256)}/{name}"
         try:
             data = self.bucket.blob(path).download_as_bytes(timeout=20, retry=None)
         except NotFound as error:
             raise HTTPException(404, "Imagem não encontrada") from error
         except GoogleAPICallError as error:
             raise HTTPException(503, "Não foi possível carregar a imagem") from error
-        return data, reference.image.content_type
+        return data, info.content_type
 
     def cleanup(self, uid, ref_id, now=None):
         now = now or datetime.now(UTC)
@@ -266,11 +406,12 @@ class Images:
         if not upload:
             return False
         try:
-            for name in ("original", "thumbnail"):
-                try:
-                    self.bucket.blob(f"{upload['prefix']}/{name}").delete(timeout=20, retry=None)
-                except NotFound:
-                    pass
+            for prefix in self.object_prefixes(self.repo.job(uid, ref_id).id, upload):
+                for name in ("original", "thumbnail"):
+                    try:
+                        self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
+                    except NotFound:
+                        pass
         except GoogleAPICallError:
             logger.warning("Image cleanup deferred", exc_info=True)
             return False

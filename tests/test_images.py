@@ -261,3 +261,92 @@ def test_image_title_and_notes_edit_keeps_file_and_requeues(client, account):
     assert client.get(path, headers=headers).json()["text"] == "Ideias de **onboarding**"
     assert client.delete(path + "?revision=1", headers=headers).status_code == 409
     assert client.delete(path + "?revision=2", headers=headers).status_code == 204
+
+
+def test_attach_preview_keeps_link_kind_and_serves_the_photo(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    created = client.put(
+        path,
+        json={"kind": "link", "url": "https://x.com/richardrx/status/2099853605054316775"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["kind"] == "link" and created.json()["image"] is None
+    info = media().attach_preview(uid, ref_id, picture())
+    assert info.width == 900 and info.height == 600
+    record = client.get(path, headers=headers).json()
+    assert record["kind"] == "link" and record["image"]["width"] == 900
+    photo = client.get(path + "/image", headers=headers)
+    assert photo.status_code == 200
+    assert Image.open(BytesIO(photo.content)).size == (900, 600)
+    second = media().attach_preview(uid, ref_id, picture("red"))
+    assert second.width == 900
+    record = client.get(path, headers=headers).json()
+    assert len(record["images"]) == 2
+    assert record["image"]["sha256"] == record["images"][0]["sha256"]
+    first_bytes = client.get(path + "/image", params={"index": 0}, headers=headers).content
+    other = client.get(path + "/image", params={"index": 1}, headers=headers)
+    assert other.status_code == 200
+    assert other.content != first_bytes
+    assert client.get(path + "/image", params={"index": 2}, headers=headers).status_code == 404
+
+
+def test_attach_preview_marks_video_poster(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    created = client.put(
+        path,
+        json={"kind": "link", "url": "https://x.com/a/status/2099804636328648823"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    info = media().attach_preview(uid, ref_id, picture("blue"), preview_kind="video")
+    assert info.preview_kind == "video"
+    record = client.get(path, headers=headers).json()
+    assert record["images"][0]["preview_kind"] == "video"
+
+
+def test_attach_author_is_served_apart_from_the_gallery(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    created = client.put(
+        path,
+        json={"kind": "link", "url": "https://x.com/ada/status/2099853605054316775"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    avatar = media().attach_author(uid, ref_id, picture("green"))
+    preview = media().attach_preview(uid, ref_id, picture("red"))
+    record = client.get(path, headers=headers).json()
+    assert record["author_image"]["sha256"] == avatar.sha256
+    assert record["image"]["sha256"] == preview.sha256
+    assert record["images"][0]["sha256"] == preview.sha256
+    gallery = client.get(path + "/image", headers=headers)
+    author = client.get(path + "/image", params={"role": "author"}, headers=headers)
+    assert gallery.status_code == 200 and author.status_code == 200
+    assert gallery.content != author.content
+
+
+def test_link_title_edit_does_not_requeue(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    created = client.put(
+        path,
+        json={"kind": "link", "title": "", "url": "https://x.com/ada/status/2099853605054316775"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    edit = {"kind": "link", "title": "Mixer no estúdio", "text": "",
+            "revision": created.json()["revision"], "mutation_id": str(uuid4())}
+    edited = client.patch(path, json=edit, headers=headers)
+    assert edited.status_code == 200, edited.text
+    body = edited.json()
+    assert body["title"] == "Mixer no estúdio"
+    assert body["status"] == "queued"
+    assert body["revision"] == created.json()["revision"] + 1
+    assert media().repo.job(uid, ref_id).get().to_dict()["revision"] == created.json()["revision"]

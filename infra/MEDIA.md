@@ -3,7 +3,8 @@
 Arquivos de até **cinco minutos e 25 MiB preparados**. Os apps aceitam originais de
 até 150 MiB, exportam vídeo em 720p/H.264 ou áudio M4A e conferem o tamanho antes de
 enviar. A API aceita MP4/M4A, MP3 e WAV compatíveis; vídeo precisa ser H.264.
-Não há gravação de microfone, download de vídeos sociais ou importação de playlists.
+Não há gravação de microfone nem importação de playlists. Vídeos sociais não ficam
+para reprodução; o worker só lê um trecho público limitado para fala e frames.
 
 ## Captura e processamento
 
@@ -43,6 +44,11 @@ sotaques, ruído, música, cenas rápidas e outros idiomas precisam de acervo ma
 | --- | --- |
 | YouTube | Título e autor públicos via oEmbed, incluindo links curtos/Shorts reconhecidos. |
 | Vimeo | Título e autor públicos via oEmbed para links de vídeo reconhecidos. |
+| X / Twitter | Texto público do post, nome do autor, foto de perfil, fotos, GIFs
+  (como foto) e pôsteres de vídeo. Do primeiro vídeo, transcreve-se só a fala dos
+  15 s iniciais (música de fundo é descartada); o mp4 não fica para reprodução.
+  Áudio solto segue a mesma janela de 15 s e aparece no detalhe com player.
+  Respostas não entram. |
 | Instagram | Descrição pública quando acessível; login, bloqueios e ausência de texto preservam só o link. |
 
 Esses links têm cobertura parcial. O app mostra o material efetivamente lido e
@@ -74,4 +80,9 @@ Referências: [áudio OpenRouter](https://openrouter.ai/docs/guides/overview/mul
 
 ## Editar título e anotações
 
-`PATCH /v1/references/{id}` aceita, desde 12/09/2026, um corpo com `kind` igual ao da referência de áudio/vídeo, `title`, `text`, `revision` e `mutation_id`. O arquivo e seus metadados não mudam; a revisão sobe, a análise volta para a fila (com reserva de operação e, para mídia, dos segundos de áudio, como em uma nova tentativa) e o mesmo `mutation_id` repetido devolve o mesmo resultado. Tipo diferente ou revisão desatualizada respondem 409. Cobertura em `tests/test_images.py` e `tests/test_media.py`.
+`PATCH /v1/references/{id}` aceita, desde 12/09/2026, um corpo com `kind` igual ao da
+referência (`image`, `audio`, `video` ou `link`), `title`, `text`, `revision` e
+`mutation_id`. Em upload, o arquivo não muda; a revisão sobe e a análise volta para a
+fila. Em post (`kind=link`), só o título muda e a análise não é reenfileirada.
+O mesmo `mutation_id` repetido devolve o mesmo resultado. Tipo diferente ou revisão
+desatualizada respondem 409. Cobertura em `tests/test_images.py` e `tests/test_media.py`.

@@ -28,6 +28,10 @@ def main():
     run("storage", "buckets", "add-iam-policy-binding",
         f"gs://{PROJECT}.firebasestorage.app", f"--member={worker}",
         "--role=roles/storage.objectViewer", "--format=none")
+    # Post photos are written by the worker (API never fetches third-party bytes).
+    run("storage", "buckets", "add-iam-policy-binding",
+        f"gs://{PROJECT}.firebasestorage.app", f"--member={worker}",
+        "--role=roles/storage.objectCreator", "--format=none")
     if not exists("secrets", "describe", "queep-openrouter"):
         run("secrets", "create", "queep-openrouter", "--replication-policy=user-managed",
             f"--locations={REGION}", "--labels=app=queep,environment=development")

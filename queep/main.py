@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 import anyio
@@ -23,6 +23,7 @@ from queep.media import MediaFiles
 from queep.models import (
     Capture,
     Edit,
+    ImageInfo,
     Library,
     MetadataEdit,
     Reference,
@@ -134,7 +135,7 @@ def account_claims(credentials, recent=False, revoked=True):
         if recent:
             age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
             if not 0 <= age <= 300:
-                raise HTTPException(403, "Confirme sua senha novamente para alterar a exclusão.")
+                raise HTTPException(403, "Confirme sua identidade novamente para alterar a exclusão.")
         return claims
     except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
             auth.UserNotFoundError, ValueError) as exc:
@@ -176,6 +177,33 @@ def cancel_account_deletion(
 def account_status(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
     uid = account_claims(credentials)["uid"]
     return Accounts(database(), image_bucket(), Settings()).get_status(uid)
+
+
+@app.put("/v1/account/avatar", response_model=ImageInfo)
+async def upload_avatar(request: Request, uid: UID):
+    async with image_limiter:
+        data = bytearray()
+        async for chunk in request.stream():
+            if len(data) + len(chunk) > MAX_BYTES:
+                raise HTTPException(413, "Escolha uma foto de até 12 MB")
+            data.extend(chunk)
+        service = Accounts(database(), image_bucket(), Settings())
+        return await anyio.to_thread.run_sync(service.put_avatar, uid, bytes(data))
+
+
+@app.get("/v1/account/avatar")
+def read_avatar(uid: UID, thumbnail: bool = True):
+    result = Accounts(database(), image_bucket(), Settings()).get_avatar(uid, thumbnail)
+    if not result:
+        return Response(status_code=204)
+    data, content_type = result
+    return Response(content=data, media_type=content_type,
+                    headers={"Content-Disposition": "inline"})
+
+
+@app.delete("/v1/account/avatar", status_code=204)
+def remove_avatar(uid: UID):
+    Accounts(database(), image_bucket(), Settings()).delete_avatar(uid)
 
 
 @app.post("/v1/billing/sync", response_model=Access)
@@ -255,8 +283,10 @@ def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False):
 @app.get("/v1/references/{ref_id}/image", responses={200: {"content": {
     "image/jpeg": {}, "image/png": {},
 }}})
-def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False):
-    data, content_type = media.read(uid, str(ref_id), thumbnail)
+def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False,
+               index: Annotated[int, Query(ge=0, le=3)] = 0,
+               role: Annotated[Literal["gallery", "author"], Query()] = "gallery"):
+    data, content_type = media.read(uid, str(ref_id), thumbnail, index, role)
     return Response(content=data, media_type=content_type,
                     headers={"Content-Disposition": "inline"})
 

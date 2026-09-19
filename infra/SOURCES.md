@@ -9,11 +9,20 @@ usuário são preservados. Editar descarta a extração anterior; excluir remove
 
 - HTML, texto e Markdown públicos. GitHub: README renderizado, sem baixar o repositório.
 - YouTube/Vimeo: título e autor públicos via oEmbed. Instagram: descrição pública
-  quando acessível. `content_kind=metadata` distingue esses dados de texto de página.
-  Fala/cenas não são lidas pelo link; [cobertura social e envio de arquivos](MEDIA.md).
-- Até 12.000 bytes de texto armazenados; até 8.000 chegam à interpretação. Texto e
-  resumo entram no vetor; a conferência usa resumo e trecho relacionado à consulta.
-- Cobertura sempre parcial: só texto acessível, sem imagens da página, vídeo ou áudio.
+  quando acessível. X/Twitter: texto público do post (autor + corpo, com quebras de
+  linha), sem chrome da página; fotos, GIFs e pôsteres de vídeo públicos são
+  armazenados no mesmo documento. Do primeiro vídeo, só a fala dos 15 s iniciais
+  entra na análise (não a música de fundo) e o arquivo não é guardado para play.
+  Título nativo da rede, quando existe (YouTube), é copiado; em X/Instagram a IA
+  gera um título se houver texto ou mídia. `content_kind=metadata` distingue esses
+  dados de texto de página. Frames e fala do primeiro vídeo do post entram na
+  análise; [cobertura social e envio de arquivos](MEDIA.md).
+- Até 12.000 bytes de texto armazenados; até 8.000 chegam à interpretação. Texto,
+  descrição visual das fotos anexadas e resumo entram no vetor; a conferência usa
+  resumo, trecho relacionado à consulta e a descrição das imagens do post.
+- Cobertura sempre parcial: só texto acessível. Sites genéricos não baixam imagens
+  da página, vídeo ou áudio; posts sociais analisam as fotos, GIFs e pôsteres
+  públicos, mais a fala dos 15 s iniciais do primeiro vídeo. O mp4 não fica no app.
 - Login, bloqueios, JavaScript obrigatório, formatos não suportados e falhas de acesso
   preservam o link/contexto; ficam pesquisáveis por esses dados, sem inventar o conteúdo.
 - Referências antigas são relidas quando editadas e salvas. Não há recaptura automática,
