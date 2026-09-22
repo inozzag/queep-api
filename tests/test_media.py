@@ -47,7 +47,7 @@ def video(tmp_path_factory):
             "-f",
             "lavfi",
             "-i",
-            "color=c=blue:s=320x180:r=5",
+            "color=c=blue:s=320x180:r=5:d=2",
             "-i",
             str(audio),
             "-shortest",

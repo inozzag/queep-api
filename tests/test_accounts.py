@@ -60,6 +60,11 @@ def test_request_is_free_idempotent_and_scoped_to_verified_user(client, account,
     repo.save(uid, ref_id, Capture(kind="note", text="Private deletion fixture"))
     unrelated = "untouched-" + uuid4().hex
     repo.save(unrelated, ref_id, Capture(kind="note", text="Other account"))
+    sandbox_job = database().collection("jobs_testflight").document(repo.job(uid, ref_id).id)
+    sandbox_job.set(repo.job(uid, ref_id).get().to_dict())
+    unrelated_sandbox_job = database().collection("jobs_testflight").document(
+        repo.job(unrelated, ref_id).id)
+    unrelated_sandbox_job.set(repo.job(unrelated, ref_id).get().to_dict())
     change = {"operation_id": str(uuid4()), "version": 0, "immediate": True, "uid": unrelated}
     result = client.post("/v1/account/deletion", headers=headers, json=change)
     assert result.status_code == 202 and result.json()["status"] == "deleting"
@@ -71,9 +76,12 @@ def test_request_is_free_idempotent_and_scoped_to_verified_user(client, account,
     assert repo.get(unrelated, ref_id).text == "Other account"
     assert not repo.collection(uid).document(ref_id).get().exists
     assert not repo.job(uid, ref_id).get().exists
+    assert not sandbox_job.get().exists
+    assert unrelated_sandbox_job.get().exists
     complete(service, uid)
     repo.collection(unrelated).document(ref_id).delete()
     repo.job(unrelated, ref_id).delete()
+    unrelated_sandbox_job.delete()
 
 
 def test_barrier_blocks_inflight_writes_workers_and_billing(account, service):
@@ -215,7 +223,9 @@ def test_cloud_rollout_gate_does_not_accept_new_deletions(client, account, monke
     assert not deletion_document(database(), uid).get().exists
 
 
-def test_avatar_round_trip_survives_replace_and_is_removed_with_the_account(client, account, service):
+def test_avatar_round_trip_survives_replace_and_is_removed_with_the_account(
+    client, account, service,
+):
     uid, headers = account
     assert client.get("/v1/account/avatar", headers=headers).status_code == 204
     first = client.put("/v1/account/avatar", content=png(), headers=headers)
@@ -226,7 +236,7 @@ def test_avatar_round_trip_survives_replace_and_is_removed_with_the_account(clie
     second = client.put("/v1/account/avatar", content=png(), headers=headers)
     assert second.status_code == 200
     prefix = database().collection("users").document(uid).get().to_dict()["avatar_prefix"]
-    assert prefix.startswith(f"avatars/v1/")
+    assert prefix.startswith("avatars/v1/")
     assert client.delete("/v1/account/avatar", headers=headers).status_code == 204
     assert client.get("/v1/account/avatar", headers=headers).status_code == 204
     client.put("/v1/account/avatar", content=png(), headers=headers)

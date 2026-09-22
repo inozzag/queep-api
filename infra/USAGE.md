@@ -1,7 +1,9 @@
-# Uso diário — desenvolvimento
+# Uso diário — proteção contra abuso
 
-Limites operacionais iniciais por conta, independentes de assinatura. Cotas e preços
-comerciais continuam para a etapa de RevenueCat/IAP.
+> As cotas comerciais e `GET /v1/usage` são mensais por plano desde GAZ-115:
+> veja [PLANS.md](PLANS.md). Este documento registra o fair-use diário separado.
+
+Limites operacionais de proteção por conta, adicionais às cotas mensais.
 
 | Medida | Padrão | Configuração |
 | --- | --- | --- |
@@ -10,7 +12,7 @@ comerciais continuam para a etapa de RevenueCat/IAP.
 | Arquivos preparados, incluindo miniaturas | 100 MiB/dia | `QUEEP_UPLOAD_DAILY_MIB` |
 | Buscas que iniciam IA | 100/dia | `QUEEP_SEARCH_DAILY_LIMIT` |
 
-O dia vira à meia-noite UTC. `GET /v1/usage` retorna contadores e `resets_at`;
+O fair-use vira à meia-noite UTC. `GET /v1/usage` retorna os contadores mensais do plano e `resets_at`;
 os apps mostram a data/hora local em **Conta → Uso e privacidade**. A consulta
 exige conta ativa, mas não assinatura. Respostas são privadas, sem cache.
 

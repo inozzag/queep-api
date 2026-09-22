@@ -12,7 +12,7 @@ from queep.account_state import account_version, is_closed, require_open
 from queep.ai import ANALYSIS_VERSION, INTERPRETER, SPACE
 from queep.models import Reference
 from queep.repository import Repository, new_job
-from queep.usage import reserve_operation
+from queep.usage import policy, reserve_operation
 
 
 class Jobs:
@@ -24,7 +24,7 @@ class Jobs:
 
     def bootstrap(self, job_id):
         """Upgrade the outbox left by the capture-only release without losing newer work."""
-        doc = self.db.collection("jobs").document(job_id)
+        doc = self.repo.jobs().document(job_id)
 
         @firestore.transactional
         def write(tx):
@@ -37,7 +37,7 @@ class Jobs:
         self.repo.transact(write)
 
     def due(self):
-        collection = self.db.collection("jobs")
+        collection = self.repo.jobs()
         pending = collection.where(filter=FieldFilter("state", "==", "pending"))
         for doc in pending.limit(100).stream():
             if "run_id" not in doc.to_dict():
@@ -54,7 +54,7 @@ class Jobs:
         return ready
 
     def pause(self, job_id):
-        doc = self.db.collection("jobs").document(job_id)
+        doc = self.repo.jobs().document(job_id)
 
         @firestore.transactional
         def write(tx):
@@ -78,7 +78,7 @@ class Jobs:
                 and job["revision"] == task["revision"])
 
     def enqueued(self, task):
-        doc = self.db.collection("jobs").document(task["job_id"])
+        doc = self.repo.jobs().document(task["job_id"])
 
         @firestore.transactional
         def write(tx):
@@ -90,7 +90,7 @@ class Jobs:
 
     def claim(self, task, now=None):
         now = now or datetime.now(UTC)
-        doc = self.db.collection("jobs").document(task["job_id"])
+        doc = self.repo.jobs().document(task["job_id"])
         token = uuid4().hex
 
         @firestore.transactional
@@ -134,13 +134,13 @@ class Jobs:
         if (is_closed(self.db, work["uid"])
                 or account_version(self.db, work["uid"]) != work.get("account_version", 0)):
             return False
-        job = self.db.collection("jobs").document(work["job_id"]).get().to_dict()
+        job = self.repo.jobs().document(work["job_id"]).get().to_dict()
         return bool(self.matches(job, work) and job.get("token") == work["token"]
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
     def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None,
                title=None, image=None, images=None, author_image=None):
-        doc = self.db.collection("jobs").document(work["job_id"])
+        doc = self.repo.jobs().document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
 
@@ -191,6 +191,7 @@ class Jobs:
         return self.repo.transact(write)
 
     def retry(self, uid, ref_id, revision):
+        access = policy(self.db, uid)
         doc = self.repo.collection(uid).document(ref_id)
         job = self.repo.job(uid, ref_id)
 
@@ -205,9 +206,9 @@ class Jobs:
             if old["status"] != "error":
                 return Reference.model_validate(old)
             now = datetime.now(UTC)
-            reserve_operation(self.db, uid, tx, now=now,
+            reserve_operation(self.db, uid, tx, now=now, access=access,
                               media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
             tx.update(doc, {"status": "queued", "updated_at": now})
-            tx.set(job, new_job(uid, ref_id, revision, now))
+            tx.set(job, new_job(uid, ref_id, revision, now) | {"plan": access.plan})
             return Reference.model_validate({**old, "status": "queued", "updated_at": now})
         return self.repo.transact(write)

@@ -21,6 +21,270 @@
         }
       }
     },
+    "/v1/billing/access": {
+      "get": {
+        "summary": "Subscription Access",
+        "operationId": "subscription_access_v1_billing_access_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Access"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "summary": "Usage",
+        "operationId": "usage_v1_usage_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/account/deletion": {
+      "post": {
+        "summary": "Delete Account",
+        "operationId": "delete_account_v1_account_deletion_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/account/deletion/cancel": {
+      "post": {
+        "summary": "Cancel Account Deletion",
+        "operationId": "cancel_account_deletion_v1_account_deletion_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountChange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/account": {
+      "get": {
+        "summary": "Account Status",
+        "operationId": "account_status_v1_account_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/account/avatar": {
+      "put": {
+        "summary": "Upload Avatar",
+        "operationId": "upload_avatar_v1_account_avatar_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImageInfo"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read Avatar",
+        "operationId": "read_avatar_v1_account_avatar_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "thumbnail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Thumbnail"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Remove Avatar",
+        "operationId": "remove_avatar_v1_account_avatar_delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        }
+      }
+    },
+    "/v1/billing/sync": {
+      "post": {
+        "summary": "Sync Subscription",
+        "operationId": "sync_subscription_v1_billing_sync_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Access"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/billing/webhook": {
+      "post": {
+        "summary": "Subscription Event",
+        "operationId": "subscription_event_v1_billing_webhook_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/references/{ref_id}": {
       "put": {
         "summary": "Create",
@@ -143,7 +407,18 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/Edit"
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/Edit"
+                  },
+                  {
+                    "$ref": "#/components/schemas/MetadataEdit"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ArchiveEdit"
+                  }
+                ],
+                "title": "Capture"
               }
             }
           }
@@ -218,6 +493,356 @@
         }
       }
     },
+    "/v1/references": {
+      "post": {
+        "summary": "Capture Reference",
+        "operationId": "capture_reference_v1_references_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Capture"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reference"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Library",
+        "operationId": "library_v1_references_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 40,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 1000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "exclude",
+                "only"
+              ],
+              "type": "string",
+              "default": "exclude",
+              "title": "Archived"
+            }
+          },
+          {
+            "name": "space_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Library"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/spaces": {
+      "get": {
+        "summary": "List Spaces",
+        "operationId": "list_spaces_v1_spaces_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/Space"
+                  },
+                  "type": "array",
+                  "title": "Response List Spaces V1 Spaces Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "summary": "Create Space",
+        "operationId": "create_space_v1_spaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceName"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Space"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/v1/spaces/{space_id}": {
+      "patch": {
+        "summary": "Edit Space",
+        "operationId": "edit_space_v1_spaces__space_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceEdit"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Space"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete Space",
+        "operationId": "delete_space_v1_spaces__space_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "space_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Space Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/references/{ref_id}/spaces": {
+      "post": {
+        "summary": "Assign Spaces",
+        "operationId": "assign_spaces_v1_references__ref_id__spaces_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ref Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SpaceMembership"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reference"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/references/{ref_id}/image": {
       "put": {
         "summary": "Upload Image",
@@ -247,6 +872,27 @@
               "maxLength": 200,
               "default": "",
               "title": "Title"
+            }
+          },
+          {
+            "name": "space_ids",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 40
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Space Ids"
             }
           }
         ],
@@ -312,6 +958,32 @@
               "default": false,
               "title": "Thumbnail"
             }
+          },
+          {
+            "name": "index",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 3,
+              "minimum": 0,
+              "default": 0,
+              "title": "Index"
+            }
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "gallery",
+                "author"
+              ],
+              "type": "string",
+              "default": "gallery",
+              "title": "Role"
+            }
           }
         ],
         "responses": {
@@ -338,10 +1010,10 @@
         }
       }
     },
-    "/v1/references": {
-      "get": {
-        "summary": "Library",
-        "operationId": "library_v1_references_get",
+    "/v1/references/{ref_id}/media": {
+      "put": {
+        "summary": "Upload Media",
+        "operationId": "upload_media_v1_references__ref_id__media_put",
         "security": [
           {
             "HTTPBearer": []
@@ -349,35 +1021,137 @@
         ],
         "parameters": [
           {
-            "name": "limit",
-            "in": "query",
-            "required": false,
+            "name": "ref_id",
+            "in": "path",
+            "required": true,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 1,
-              "default": 40,
-              "title": "Limit"
+              "type": "string",
+              "format": "uuid",
+              "title": "Ref Id"
             }
           },
           {
-            "name": "cursor",
+            "name": "title",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 200,
+              "default": "",
+              "title": "Title"
+            }
+          },
+          {
+            "name": "space_ids",
             "in": "query",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
-                  "maxLength": 1000
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "maxItems": 40
                 },
                 {
                   "type": "null"
                 }
               ],
-              "title": "Cursor"
+              "title": "Space Ids"
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Reference"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "summary": "Read Media",
+        "operationId": "read_media_v1_references__ref_id__media_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ref Id"
+            }
+          },
+          {
+            "name": "thumbnail",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Thumbnail"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/references/batch-archive": {
+      "post": {
+        "summary": "Batch Archive",
+        "operationId": "batch_archive_v1_references_batch_archive_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchArchive"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -399,7 +1173,12 @@
               }
             }
           }
-        }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
       }
     },
     "/v1/references/{ref_id}/retry": {
@@ -503,6 +1282,143 @@
   },
   "components": {
     "schemas": {
+      "Access": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "development",
+              "required"
+            ],
+            "title": "Mode",
+            "default": "required"
+          },
+          "active": {
+            "type": "boolean",
+            "title": "Active"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "will_renew": {
+            "type": "boolean",
+            "title": "Will Renew",
+            "default": false
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Checked At"
+          },
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "max"
+            ],
+            "title": "Plan",
+            "default": "free"
+          },
+          "features": {
+            "additionalProperties": {
+              "type": "boolean"
+            },
+            "type": "object",
+            "title": "Features",
+            "readOnly": true
+          },
+          "limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Limits",
+            "readOnly": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "active",
+          "checked_at",
+          "features",
+          "limits"
+        ],
+        "title": "Access"
+      },
+      "AccountChange": {
+        "properties": {
+          "operation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Operation Id"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Version"
+          },
+          "immediate": {
+            "type": "boolean",
+            "title": "Immediate",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "operation_id",
+          "version"
+        ],
+        "title": "AccountChange"
+      },
+      "ArchiveEdit": {
+        "properties": {
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "archived"
+        ],
+        "title": "ArchiveEdit"
+      },
+      "BatchArchive": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "ids",
+          "archived"
+        ],
+        "title": "BatchArchive"
+      },
       "Capture": {
         "properties": {
           "kind": {
@@ -538,6 +1454,15 @@
               }
             ],
             "title": "Url"
+          },
+          "space_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Space Ids"
           }
         },
         "additionalProperties": false,
@@ -582,6 +1507,15 @@
               }
             ],
             "title": "Url"
+          },
+          "space_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Space Ids"
           },
           "revision": {
             "type": "integer",
@@ -641,6 +1575,15 @@
           "byte_count": {
             "type": "integer",
             "title": "Byte Count"
+          },
+          "preview_kind": {
+            "type": "string",
+            "enum": [
+              "photo",
+              "video"
+            ],
+            "title": "Preview Kind",
+            "default": "photo"
           }
         },
         "type": "object",
@@ -659,6 +1602,12 @@
             "type": "string",
             "maxLength": 4000,
             "title": "Summary"
+          },
+          "headline": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Headline",
+            "default": ""
           },
           "topics": {
             "items": {
@@ -743,6 +1692,112 @@
         ],
         "title": "Library"
       },
+      "MediaInfo": {
+        "properties": {
+          "sha256": {
+            "type": "string",
+            "title": "Sha256"
+          },
+          "content_type": {
+            "type": "string",
+            "enum": [
+              "audio/mp4",
+              "video/mp4"
+            ],
+            "title": "Content Type"
+          },
+          "duration_seconds": {
+            "type": "number",
+            "maximum": 301.0,
+            "exclusiveMinimum": 0.0,
+            "title": "Duration Seconds"
+          },
+          "byte_count": {
+            "type": "integer",
+            "title": "Byte Count"
+          },
+          "has_audio": {
+            "type": "boolean",
+            "title": "Has Audio"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sha256",
+          "content_type",
+          "duration_seconds",
+          "byte_count",
+          "has_audio"
+        ],
+        "title": "MediaInfo"
+      },
+      "MetadataEdit": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "image",
+              "audio",
+              "video",
+              "link"
+            ],
+            "title": "Kind"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 30000,
+            "title": "Text",
+            "default": ""
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 1.0,
+            "title": "Revision"
+          },
+          "mutation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Mutation Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "kind",
+          "revision",
+          "mutation_id"
+        ],
+        "title": "MetadataEdit",
+        "description": "Title and notes of an uploaded image or media file; the file itself never changes."
+      },
       "Reference": {
         "properties": {
           "id": {
@@ -754,7 +1809,9 @@
             "enum": [
               "note",
               "link",
-              "image"
+              "image",
+              "audio",
+              "video"
             ],
             "title": "Kind"
           },
@@ -801,6 +1858,25 @@
             "format": "date-time",
             "title": "Updated At"
           },
+          "space_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Space Ids"
+          },
+          "archived_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
           "analysis": {
             "anyOf": [
               {
@@ -820,6 +1896,63 @@
                 "type": "null"
               }
             ]
+          },
+          "images": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ImageInfo"
+                },
+                "type": "array",
+                "maxItems": 4
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Images"
+          },
+          "author_image": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ImageInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "source": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SourceContent"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "media": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/MediaInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transcript": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 18000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript"
           }
         },
         "type": "object",
@@ -858,6 +1991,18 @@
             "maxLength": 500,
             "minLength": 2,
             "title": "Query"
+          },
+          "space_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Space Id"
           }
         },
         "additionalProperties": false,
@@ -892,6 +2037,201 @@
           "has_pending"
         ],
         "title": "SearchResults"
+      },
+      "SourceContent": {
+        "properties": {
+          "content_kind": {
+            "type": "string",
+            "enum": [
+              "page",
+              "metadata",
+              "profile"
+            ],
+            "title": "Content Kind",
+            "default": "page"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "read",
+              "unavailable"
+            ],
+            "title": "State"
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 4096,
+            "title": "Url"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Title",
+            "default": ""
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 12000,
+            "title": "Text",
+            "default": ""
+          },
+          "author_name": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Author Name",
+            "default": ""
+          },
+          "author_handle": {
+            "type": "string",
+            "maxLength": 32,
+            "title": "Author Handle",
+            "default": ""
+          },
+          "native_title": {
+            "type": "boolean",
+            "title": "Native Title",
+            "default": false
+          },
+          "fetched_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Fetched At"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "limitations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 4,
+            "title": "Limitations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "url",
+          "fetched_at"
+        ],
+        "title": "SourceContent"
+      },
+      "Space": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "sort_index": {
+            "type": "integer",
+            "title": "Sort Index"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          },
+          "reference_count": {
+            "type": "integer",
+            "title": "Reference Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sort_index",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "Space"
+      },
+      "SpaceEdit": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "sort_index": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 39.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Index"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SpaceEdit"
+      },
+      "SpaceMembership": {
+        "properties": {
+          "add": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Add"
+          },
+          "remove": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 40,
+            "title": "Remove"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SpaceMembership"
+      },
+      "SpaceName": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Name"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "SpaceName"
       },
       "ValidationError": {
         "properties": {

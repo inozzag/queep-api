@@ -21,6 +21,8 @@ from queep.jobs import Jobs
 from queep.media import MAX_BYTES as MAX_MEDIA_BYTES
 from queep.media import MediaFiles
 from queep.models import (
+    ArchiveEdit,
+    BatchArchive,
     Capture,
     Edit,
     ImageInfo,
@@ -30,9 +32,14 @@ from queep.models import (
     RetryAnalysis,
     Search,
     SearchResults,
+    Space,
+    SpaceEdit,
+    SpaceMembership,
+    SpaceName,
 )
 from queep.repository import Repository
 from queep.search import search
+from queep.spaces import Spaces
 from queep.usage import snapshot
 from queep.worker import engine
 
@@ -116,8 +123,8 @@ def subscription_access(uid: UID, subscriptions: Subscriptions):
 
 
 @app.get("/v1/usage")
-def usage(uid: UID):
-    return snapshot(database(), uid, Settings())
+def usage(uid: UID, subscriptions: Subscriptions):
+    return snapshot(database(), uid, Settings(), access=subscriptions.access(uid))
 
 
 class AccountChange(BaseModel):
@@ -135,7 +142,8 @@ def account_claims(credentials, recent=False, revoked=True):
         if recent:
             age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
             if not 0 <= age <= 300:
-                raise HTTPException(403, "Confirme sua identidade novamente para alterar a exclusão.")
+                raise HTTPException(403,
+                                    "Confirme sua identidade novamente para alterar a exclusão.")
         return claims
     except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
             auth.UserNotFoundError, ValueError) as exc:
@@ -235,6 +243,41 @@ def create(ref_id: UUID, capture: Capture, uid: PaidUID, repo: Repo, background:
     return reference
 
 
+@app.post("/v1/references", response_model=Reference, status_code=201)
+def capture_reference(capture: Capture, uid: PaidUID, repo: Repo, background: BackgroundTasks):
+    from uuid import uuid4
+    return create(uuid4(), capture, uid, repo, background)
+
+
+@app.get("/v1/spaces", response_model=list[Space])
+def list_spaces(uid: UID):
+    return Spaces(database()).list(uid)
+
+
+@app.post("/v1/spaces", response_model=Space, status_code=201)
+def create_space(change: SpaceName, uid: UID):
+    return Spaces(database()).save(uid, change)
+
+
+@app.patch("/v1/spaces/{space_id}", response_model=Space)
+def edit_space(space_id: UUID, change: SpaceEdit, uid: UID):
+    return Spaces(database()).save(uid, change, str(space_id))
+
+
+@app.delete("/v1/spaces/{space_id}", status_code=204)
+def delete_space(space_id: UUID, uid: UID, background: BackgroundTasks):
+    service = Spaces(database())
+    service.delete(uid, str(space_id))
+    # Durable cleanup is also resumed by the private dispatch worker after a crash.
+    background.add_task(service.cleanup, uid, str(space_id))
+    return Response(status_code=204)
+
+
+@app.post("/v1/references/{ref_id}/spaces", response_model=Reference)
+def assign_spaces(ref_id: UUID, change: SpaceMembership, uid: UID):
+    return Spaces(database()).assign(uid, str(ref_id), change)
+
+
 @app.put("/v1/references/{ref_id}/image", response_model=Reference, openapi_extra={
     "requestBody": {"required": True, "content": {
         "application/octet-stream": {"schema": {"type": "string", "format": "binary"}},
@@ -242,7 +285,8 @@ def create(ref_id: UUID, capture: Capture, uid: PaidUID, repo: Repo, background:
 })
 async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Media,
                        background: BackgroundTasks,
-                       title: Annotated[str, Query(max_length=200)] = ""):
+                       title: Annotated[str, Query(max_length=200)] = "",
+                       space_ids: Annotated[list[UUID] | None, Query(max_length=40)] = None):
     async with image_limiter:
         data = bytearray()
         async for chunk in request.stream():
@@ -250,15 +294,17 @@ async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Medi
                 raise HTTPException(413, "Escolha uma imagem de até 12 MB")
             data.extend(chunk)
         reference = await anyio.to_thread.run_sync(media.upload, uid, str(ref_id), title.strip(),
-                                                 bytes(data))
+                                                 bytes(data), list(map(str, space_ids or [])))
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 
 
 @app.put("/v1/references/{ref_id}/media", response_model=Reference)
-async def upload_media(ref_id: UUID, request: Request, uid: PaidUID,
+async def upload_media(ref_id: UUID, request: Request, uid: UID, subscriptions: Subscriptions,
                        background: BackgroundTasks,
-                       title: Annotated[str, Query(max_length=200)] = ""):
+                       title: Annotated[str, Query(max_length=200)] = "",
+                       space_ids: Annotated[list[UUID] | None, Query(max_length=40)] = None):
+    subscriptions.require(uid, "media_av")
     # Bound concurrent buffering as well as decoder work.
     async with image_limiter:
         data = bytearray()
@@ -268,7 +314,8 @@ async def upload_media(ref_id: UUID, request: Request, uid: PaidUID,
             data.extend(chunk)
         service = MediaFiles(database(), image_bucket())
         reference = await anyio.to_thread.run_sync(service.upload, uid, str(ref_id),
-                                                  title.strip(), bytes(data))
+                                                  title.strip(), bytes(data),
+                                                  list(map(str, space_ids or [])))
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 
@@ -293,8 +340,11 @@ def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False,
 
 @app.get("/v1/references", response_model=Library)
 def library(uid: UID, repo: Repo, limit: Annotated[int, Query(ge=1, le=100)] = 40,
-            cursor: Annotated[str | None, Query(max_length=1000)] = None):
-    return repo.list(uid, limit, cursor)
+            cursor: Annotated[str | None, Query(max_length=1000)] = None,
+            archived: Annotated[Literal["exclude", "only"], Query()] = "exclude",
+            space_id: UUID | None = None):
+    return repo.list(uid, limit, cursor, archived=archived == "only",
+                     space_id=str(space_id) if space_id else None)
 
 
 @app.get("/v1/references/{ref_id}", response_model=Reference)
@@ -303,14 +353,23 @@ def get(ref_id: UUID, uid: UID, repo: Repo):
 
 
 @app.patch("/v1/references/{ref_id}", response_model=Reference)
-def edit(ref_id: UUID, capture: Edit | MetadataEdit, uid: PaidUID, repo: Repo,
-         background: BackgroundTasks):
+def edit(ref_id: UUID, capture: Edit | MetadataEdit | ArchiveEdit, uid: UID, repo: Repo,
+         subscriptions: Subscriptions, background: BackgroundTasks):
+    if isinstance(capture, ArchiveEdit):
+        return repo.archive(uid, str(ref_id), capture.archived)
+    subscriptions.require(uid)
     if isinstance(capture, MetadataEdit):
         reference = repo.edit_metadata(uid, str(ref_id), capture)
     else:
         reference = repo.save(uid, str(ref_id), capture, editing=True)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
+
+
+@app.post("/v1/references/batch-archive", response_model=Library)
+def batch_archive(capture: BatchArchive, uid: UID, repo: Repo):
+    items = repo.batch_archive(uid, [str(ref_id) for ref_id in capture.ids], capture.archived)
+    return Library(items=items)
 
 
 @app.delete("/v1/references/{ref_id}", status_code=204)
@@ -332,7 +391,8 @@ def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: PaidUID,
 @app.post("/v1/search", response_model=SearchResults)
 def find_references(capture: Search, uid: PaidUID, repo: Repo, ai: Annotated[AI, Depends(engine)]):
     try:
-        return search(repo, ai, uid, capture.query)
+        return search(repo, ai, uid, capture.query,
+                      str(capture.space_id) if capture.space_id else None)
     except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:
         raise HTTPException(
             503, "A busca está temporariamente indisponível. Tente novamente.",

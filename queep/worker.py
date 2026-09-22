@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from queep.ai import AI, AIError, document, generated_title, headline_title, without_product_prefix
 from queep.budget import Budget
 from queep.config import Settings, database, firebase_app, image_bucket
+from queep.cost_context import attribution
 from queep.dispatch import enqueue
 from queep.images import Images, as_stored_image
 from queep.jobs import Jobs
@@ -137,6 +138,28 @@ def load_clip(url):
 
 
 def process(task, jobs, ai, images, reader=read_link, media=None):
+    # Each retry and each paid call carries the same logical operation key.
+    record = jobs.repo.jobs().document(task["job_id"]).get().to_dict()
+    if not record:
+        return "ignored"
+    plan = record.get("plan", "unknown")
+    reference = (jobs.repo.collection(record["uid"]).document(record["reference_id"])
+                 .get().to_dict() or {})
+    kind = ("media" if reference.get("kind") in ("audio", "video")
+            else reference.get("kind", "unknown"))
+    if kind == "link" and reference.get("url"):
+        from urllib.parse import urlsplit
+        host = (urlsplit(reference["url"]).hostname or "").lower()
+        if any(host == h or host.endswith("." + h) for h in (
+            "instagram.com", "x.com", "twitter.com", "pinterest.com",
+            "behance.net", "dribbble.com")):
+            kind = "social"
+    with attribution(plan=plan, kind=kind, operation_id=record.get("run_id", task["run_id"]),
+                     media_seconds=(reference.get("media") or {}).get("duration_seconds", 0)):
+        return process_work(task, jobs, ai, images, reader, media)
+
+
+def process_work(task, jobs, ai, images, reader=read_link, media=None):
     work = jobs.claim(task)
     if not work:
         return "ignored"
@@ -266,6 +289,11 @@ def handle(task: Task):
 
 @app.post("/tasks/dispatch")
 def dispatch():
+    from queep.spaces import Spaces
+    try:
+        Spaces(database()).sweep()
+    except Exception:
+        logger.warning("space_cleanup_failed", exc_info=True)
     jobs, settings, count = Jobs(database()), Settings(), 0
     for doc in jobs.due():
         try:

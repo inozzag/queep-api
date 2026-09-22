@@ -24,6 +24,8 @@ Os testes usam Auth, Firestore e Storage emulados, incluindo concorrência, isol
 
 ## Contrato
 
+Spaces pessoais, captura opcional, filtro e busca: [contrato e persistência](infra/SPACES.md).
+
 - `PUT /v1/references/{UUID}`: captura idempotente de nota/link. Reenviar o mesmo UUID e conteúdo retorna o registro existente.
 - `PUT /v1/references/{UUID}/image?title=…`: JPEG/PNG binário, até 12 MiB; valida, normaliza e confirma antes de publicar.
 - `GET /v1/references/{UUID}/image[?thumbnail=true]`: imagem/miniatura com autenticação; sem URL pública.
@@ -39,6 +41,11 @@ Os testes usam Auth, Firestore e Storage emulados, incluindo concorrência, isol
 - `POST /v1/account/deletion`: autenticação recente, operação/versão; agenda exclusão em 30 dias ou inicia imediatamente. `POST /v1/account/deletion/cancel` recupera antes do prazo. [Contrato, ativação e limites](infra/ACCOUNTS.md).
 
 Conteúdo e job são gravados na mesma transação. O worker privado interpreta o material e grava o vetor da revisão atual; entregas duplicadas ou antigas não republicam conteúdo. Links públicos/READMEs são extraídos quando acessíveis; cobertura parcial é sinalizada. Regras de imagens em [IMAGES.md](infra/IMAGES.md), áudio/vídeo em [MEDIA.md](infra/MEDIA.md) e operação de IA em [AI.md](infra/AI.md).
+
+## Planos
+
+Free permanente, Pro e Max: [contrato e cotas mensais](infra/PLANS.md).
+[Preparação para Apple/TestFlight e pendências externas](infra/APPLE-LAUNCH.md).
 
 ## Próxima entrega
 

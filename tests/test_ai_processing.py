@@ -54,6 +54,45 @@ def test_duplicate_delivery_does_not_repeat_ai(library):
     assert record["status"] == "ready" and record["embedding_space"] == SPACE
 
 
+def test_testflight_outbox_cannot_be_dispatched_or_processed_by_development(monkeypatch):
+    db = database()
+    root = db.collection("outbox_isolation_tests").document(uuid4().hex)
+
+    class ScopedDB:
+        def collection(self, name):
+            return root.collection(name)
+
+        def transaction(self):
+            return db.transaction()
+
+    scoped = ScopedDB()
+    uid, ref_id = uuid4().hex, str(uuid4())
+    monkeypatch.setenv("QUEEP_JOB_COLLECTION", "jobs")
+    development = Jobs(scoped)
+    monkeypatch.setenv("QUEEP_JOB_COLLECTION", "jobs_testflight")
+    testflight = Jobs(scoped)
+    ref = testflight.repo.save(uid, ref_id, Capture(kind="note", text="TestFlight only"))
+    task = task_for(testflight.repo, testflight, uid, ref)
+    assert testflight.repo.job(uid, ref_id).id == development.repo.job(uid, ref_id).id
+    assert development.due() == []
+    assert development.claim(task) is None
+    assert process(task, development, None, None) == "ignored"
+    assert [item.id for item in testflight.due()] == [task["job_id"]]
+    calls = []
+    ai = SimpleNamespace(interpret=lambda *_: calls.append("interpret") or ANALYSIS,
+                         embed=lambda *_: calls.append("embed") or VECTOR)
+    assert process(task, testflight, ai, None) == "ready"
+    assert calls == ["interpret", "embed"]
+    assert testflight.repo.get(uid, ref_id).status == "ready"
+
+    # Reverse direction: the sandbox dispatcher must also leave development jobs alone.
+    dev_ref = development.repo.save(uid, str(uuid4()), Capture(kind="note", text="Dev only"))
+    dev_task = task_for(development.repo, development, uid, dev_ref)
+    assert testflight.due() == []
+    assert process(dev_task, testflight, None, None) == "ignored"
+    assert development.repo.job(uid, dev_ref.id).get().exists
+
+
 @pytest.mark.parametrize("action", ["edit", "delete"])
 def test_late_worker_never_publishes_after_mutation(library, action):
     repo, jobs, uid, ref = library
@@ -126,6 +165,15 @@ def test_empty_library_avoids_paid_search(library):
     repo, jobs, uid, ref = library
     result = search(repo, None, uid, "Uma coisa nova")
     assert result.items == [] and result.has_pending
+
+
+def test_semantic_search_never_returns_or_spends_on_archived_references(library):
+    repo, jobs, uid, ref = library
+    publish(*library)
+    repo.archive(uid, ref.id, True)
+    result = search(repo, None, uid, "CRM arquivado")
+    assert result.items == []
+    assert not result.has_pending
 
 
 def test_search_rejects_other_embedding_spaces(library):

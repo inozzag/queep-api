@@ -7,6 +7,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from google.api_core.exceptions import Aborted
+from google.cloud import firestore
 
 from queep.config import database
 from queep.main import app
@@ -170,6 +171,77 @@ def test_pagination_and_deleted_items(client, account):
     assert len(ids) == len(set(ids)) == 5
     assert cursor is None
     assert client.get("/v1/references?cursor=garbage", headers=headers).status_code == 400
+
+
+def test_archive_filters_lists_and_preserves_worker_completion(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    url = path(ref_id)
+    created = client.put(url, json=NOTE, headers=headers).json()
+
+    archived = client.patch(url, json={"archived": True}, headers=headers)
+    assert archived.status_code == 200, archived.text
+    assert archived.json()["archived_at"] is not None
+    assert archived.json()["revision"] == created["revision"]
+    assert client.get("/v1/references", headers=headers).json()["items"] == []
+    assert [item["id"] for item in client.get(
+        "/v1/references", params={"archived": "only"}, headers=headers,
+    ).json()["items"]] == [ref_id]
+
+    repo = Repository(database())
+    assert repo.complete(uid, ref_id, created["revision"], Interpretation(
+        summary="terminou em segundo plano", coverage="full",
+    ))
+    assert client.get(url, headers=headers).json()["status"] == "ready"
+    assert client.get("/v1/references", headers=headers).json()["items"] == []
+
+    restored = client.patch(url, json={"archived": False}, headers=headers)
+    assert restored.status_code == 200
+    assert restored.json()["archived_at"] is None
+    active = client.get("/v1/references", headers=headers).json()["items"]
+    assert [item["id"] for item in active] == [ref_id]
+
+
+def test_batch_archive_is_atomic_bounded_and_keeps_legacy_documents_active(client, account):
+    uid, headers = account
+    ids = [str(uuid4()) for _ in range(3)]
+    for ref_id in ids:
+        assert client.put(path(ref_id), json=NOTE, headers=headers).status_code == 200
+    # Old production documents without archived_at stay in the active library.
+    Repository(database()).collection(uid).document(ids[0]).update({
+        "archived_at": firestore.DELETE_FIELD,
+    })
+
+    response = client.post("/v1/references/batch-archive", json={
+        "ids": ids[1:], "archived": True,
+    }, headers=headers)
+    assert response.status_code == 200, response.text
+    assert {item["id"] for item in response.json()["items"]} == set(ids[1:])
+    active = client.get("/v1/references", headers=headers).json()["items"]
+    assert [item["id"] for item in active] == [ids[0]]
+    assert {item["id"] for item in client.get(
+        "/v1/references", params={"archived": "only"}, headers=headers,
+    ).json()["items"]} == set(ids[1:])
+
+    too_many = [str(uuid4()) for _ in range(51)]
+    assert client.post("/v1/references/batch-archive", json={
+        "ids": too_many, "archived": True,
+    }, headers=headers).status_code == 422
+
+
+def test_archived_cursor_cannot_be_reused_in_active_library(client, account):
+    _, headers = account
+    for _ in range(2):
+        ref_id = str(uuid4())
+        client.put(path(ref_id), json=NOTE, headers=headers)
+        client.patch(path(ref_id), json={"archived": True}, headers=headers)
+    page = client.get("/v1/references", params={
+        "archived": "only", "limit": 1,
+    }, headers=headers).json()
+    assert page["next_cursor"]
+    assert client.get("/v1/references", params={
+        "cursor": page["next_cursor"],
+    }, headers=headers).status_code == 400
 
 
 @pytest.mark.parametrize("payload", [
