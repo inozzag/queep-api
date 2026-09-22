@@ -2,10 +2,22 @@
 
 ## Estado desta execução
 
-Implementação local e testes em emuladores concluídos. Em 20/09/2026, após o
-autor liberar o login, foram criados os apps e produtos abaixo no App Store
-Connect. Nenhum deploy cloud, compra real, upload TestFlight ou publicação foi
-realizado. Os registros Apple permanecem em preparação para envio.
+Atualizado em **22/09/2026**. Site e páginas legais publicados em `https://queep.app`.
+API, worker, fila e scheduler TestFlight implantados; 24 contas existentes
+reconciliadas antes de ativar billing required. Os oito índices Firestore estão
+READY e os TTLs `usage`, `ai_calls`, `billing_events` e `fair_use` estão ACTIVE.
+O código da API implantado está no commit `4fa2732`.
+
+O archive **Mac 0.1.0 (1)** foi enviado, processado e está **Pronta para envio**
+no TestFlight, com a declaração de criptografia concluída. Ainda não há grupo
+de testers configurado. O archive iOS está bloqueado neste Mac por suporte de
+plataforma ausente no Xcode; o autor proibiu downloads de simuladores.
+Nenhuma compra sandbox foi executada e nenhum convite foi enviado.
+
+Validação: 329 testes da API, 18 testes QueepCore, guard de billing e build do
+site passaram. Smoke cloud confirmou Free, cotas 12/8, bloqueios de Spaces e
+A/V, isolamento entre contas, captura/retry, worker na fila exclusiva, queries
+de arquivamento e cobrança única de uso. As contas sintéticas foram removidas.
 
 Preparação adotada: **Caminho A**, Firebase `queep-dev-hstlx`, sandbox Apple e API
 isolada com `QUEEP_BILLING_MODE=required`. O serviço compartilhado `queep-api`
@@ -34,16 +46,15 @@ os oito IDs. Os quatro testes `SubscriptionContractTests` passaram após o ajust
 
 Preços salvos em ambos: Pro US$6,99/mês e US$59,99/ano; Max US$19,90/mês.
 Conversão brasileira automática: R$49,90/mês, R$399,90/ano e R$129,90/mês.
-**Max anual ainda sem preço:** Apple oferece US$159,00 ou US$159,99, mas não
-US$159,90; aguardando escolha do autor, sem substituição automática.
+Max anual **US$159,99 / R$999,90** confirmado nos dois apps, conforme escolha
+explícita do autor; a Apple não oferece US$159,90.
 Trial grátis de uma semana salvo somente no Pro anual de cada app, de
 20/09/2026 sem data final. Disponibilidade: 175 regiões atuais, sem adesão
 automática a regiões futuras; anuais apenas com pagamento antecipado.
 Family Sharing permanece desligado. Localizações dos produtos em PT-BR.
 
-Níveis iOS confirmados: Max 1, Pro 2. No Mac, a edição está aberta e ainda
-precisa ser salva: a revisão automática da ferramenta bloqueou o acesso após
-um timeout; autorização explícita para retomar foi solicitada ao autor.
+Níveis e localização dos grupos confirmados nos dois apps: Max 1, Pro 2,
+localização PT-BR "Planos Queep".
 
 RevenueCat: os oito produtos foram cadastrados e vinculados à oferta `default`
 (`ofrng5f2f128c8a`), com Pro anual primeiro. Cada package reúne os equivalentes
@@ -53,11 +64,14 @@ Max. Os produtos históricos do Test Store foram preservados.
 diferente para sandbox. As duas chaves públicas `appl_` foram preenchidas no
 arquivo local ignorado `queep-apple/Config/BillingTestFlight.xcconfig`.
 
-Permanecem pendentes: preço Max anual, salvar níveis/localização do grupo Mac,
-notificações Apple → RevenueCat, webhook RevenueCat → API isolada, URLs legais,
-metadados/revisão Apple e testes reais de sandbox. A API administrativa Apple
-ausente impede consultar o status da loja automaticamente no RevenueCat; isso
-não invalida a credencial de compras, que aparece validada nos dois apps.
+Notificações Apple → RevenueCat de produção e sandbox confirmadas nos dois
+apps. Contrato Paid Applications, banco e formulários fiscais estão Active.
+URL de privacidade salva em ambos: `https://queep.app/privacy`.
+Permanecem pendentes: archive/upload iOS em ambiente apto, grupos/testers,
+metadados/revisão beta externa e testes de compra/restore em sandbox. A
+verificação de comerciante DSA ainda aparece pendente para distribuição pública.
+A API administrativa Apple ausente impede consultar o status da loja
+automaticamente no RevenueCat; a credencial de compras aparece validada.
 
 ## Contrato do catálogo
 
@@ -73,7 +87,7 @@ no outro app. Conferir esse fluxo em sandbox nos dois sentidos.
 | `app.queep.pro.monthly` | 2 | 6,99/mês | `queep_pro` | nenhum |
 | `app.queep.pro.yearly` | 2 | 59,99/ano | `queep_pro` | 7 dias, elegíveis |
 | `app.queep.max.monthly` | 1 | 19,90/mês | `queep_pro` + `queep_max` | nenhum |
-| `app.queep.max.yearly` | 1 | 159,90/ano | `queep_pro` + `queep_max` | nenhum |
+| `app.queep.max.yearly` | 1 | 159,99/ano | `queep_pro` + `queep_max` | nenhum |
 
 Não habilitar Family Sharing. Se algum preço exato não estiver disponível no
 catálogo Apple, confirmar com o autor antes de substituir por outro price point.
@@ -88,6 +102,24 @@ anual se a oferta cadastrada for grátis por 7 dias e a Apple/RevenueCat informa
 eligibilidade. A UI não promete trial a quem já usou.
 
 ## API e worker isolados
+
+Implantação concluída em `queep-dev-hstlx`, região `southamerica-east1`:
+
+- API: `https://queep-api-testflight-721281571441.southamerica-east1.run.app`
+  (revisão `queep-api-testflight-00002-9gl`).
+- Worker privado: `queep-worker-testflight`; fila `queep-references-testflight`;
+  scheduler `queep-testflight-dispatch`; outbox `jobs_testflight`.
+- Token exclusivo: Secret Manager `queep-testflight-revenuecat-webhook:1`.
+  O valor não deve ser registrado em arquivos ou logs.
+- RevenueCat iOS: `whintgr6c260adbaa`, sandbox, app `app58a82f4b36`, todos os
+  eventos, endpoint canônico acima + `/v1/billing/webhook`.
+- RevenueCat Mac: `whintgr2aaafd88a0`, sandbox, app `appfd4e84991e`, todos os
+  eventos, endpoint alternativo do mesmo serviço
+  `https://queep-api-testflight-eafe6imkgq-rj.a.run.app/v1/billing/webhook`.
+- Ambos os webhooks responderam HTTP 200 ao evento TEST do RevenueCat.
+  A integração development/Test Store original foi preservada.
+
+Requisitos para futuras implantações:
 
 - Criar serviço API e worker/queue próprios para o sandbox TestFlight no mesmo
   projeto dev; não reutilizar fila/worker antigos em modo development, pois o
@@ -109,15 +141,19 @@ eligibilidade. A UI não promete trial a quem já usou.
 
 O repo Apple inclui `QueepiOSTestFlight` e `QueepMacTestFlight`, configuração
 **TestFlight** de release, sem `DEBUG`, com Firebase/bundles `.dev`.
-O arquivo ignorado `Config/BillingTestFlight.xcconfig` já contém as chaves públicas
-`appl_…` por app. Preencher URL da API isolada e URLs HTTPS de termos/privacidade
-publicadas. Para outro checkout, partir do exemplo e copiar as chaves públicas
-dos respectivos apps no RevenueCat.
+O arquivo ignorado `Config/BillingTestFlight.xcconfig` contém as chaves públicas
+`appl_…` por app, a URL isolada e `https://queep.app/privacy` / `/terms`.
+Para outro checkout, partir do exemplo e copiar as chaves públicas dos
+respectivos apps no RevenueCat. URLs usam `https:/$()/` para preservar `//`
+na sintaxe xcconfig.
 
 O guard do build bloqueia `test_…`, chave ausente, URLs legais ausentes e a API
 compartilhada de desenvolvimento. Não incluir chave secreta no bundle.
-Assinatura de distribuição, agreements Apple e ficha das lojas continuam tarefas
-do console. Usar archive pelos esquemas TestFlight após configurar esses dados.
+O archive Mac foi assinado e enviado automaticamente com `xcodebuild
+-exportArchive`, método `app-store-connect`, preservando versão/build.
+O bundle final foi inspecionado: 0.1.0 (1), API isolada e URLs legais corretas.
+Os Info.plist gerados agora referenciam MARKETING_VERSION/CURRENT_PROJECT_VERSION;
+o projeto declara apenas criptografia isenta para evitar repetir o questionário.
 
 ## Aceite externo pendente
 
@@ -151,10 +187,10 @@ issue produz estes valores (Apple 30%, sem CAC):
 | Plano anual | Receita líquida por mês | COGS/mês no pior mix da issue | Margem |
 |---|---:|---:|---:|
 | Pro US$59,99/ano | US$3,4994 | US$2,63 | 24,84% |
-| Max US$159,90/ano | US$9,3275 | US$8,08 | 13,37% |
+| Max US$159,99/ano | US$9,3328 | US$8,08 | 13,42% |
 
 Fórmula: `1 - COGS / (preço_anual × 0,70 / 12)`. Para manter 40%, COGS teria
-que ser ≤US$2,0997/mês (Pro) e ≤US$5,5965/mês (Max), ou o preço/cota precisaria
+que ser ≤US$2,0997/mês (Pro) e ≤US$5,5997/mês (Max), ou o preço/cota precisaria
 ser revisto pelo autor. A implementação não altera os números solicitados. Essa
 conta precisa de decisão antes de vender os anuais; os cadastros são rascunhos.
 Não assumir que a
