@@ -17,6 +17,8 @@ class Settings(BaseSettings):
     openrouter_key: SecretStr | None = Field(None, alias="OPENROUTER_API_KEY")
     ai_daily_budget: float = Field(1.0, ge=0.01, le=100, alias="QUEEP_AI_DAILY_BUDGET_USD")
     queue: str = Field("queep-references", alias="QUEEP_TASK_QUEUE")
+    job_collection: Literal["jobs", "jobs_testflight"] = Field(
+        "jobs", alias="QUEEP_JOB_COLLECTION")
     region: str = Field("southamerica-east1", alias="QUEEP_REGION")
     worker_url: str = Field("", alias="QUEEP_WORKER_URL")
     task_identity: str = Field("", alias="QUEEP_TASK_IDENTITY")
@@ -24,6 +26,7 @@ class Settings(BaseSettings):
     revenuecat_key: SecretStr | None = Field(None, alias="REVENUECAT_API_KEY")
     revenuecat_webhook_token: SecretStr | None = Field(None, alias="REVENUECAT_WEBHOOK_TOKEN")
     revenuecat_entitlement: str = Field("queep_pro", alias="REVENUECAT_ENTITLEMENT")
+    revenuecat_max_entitlement: str = Field("queep_max", alias="REVENUECAT_MAX_ENTITLEMENT")
     revenuecat_project_id: str = Field("", alias="REVENUECAT_PROJECT_ID")
     revenuecat_delete_key: SecretStr | None = Field(None, alias="REVENUECAT_DELETE_KEY")
     account_deletion_enabled: bool = Field(False, alias="QUEEP_ACCOUNT_DELETION_ENABLED")

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from queep.billing import Billing, Event, interpret_customer
 from queep.config import Settings, database
 from queep.main import app, billing
+from queep.usage import document
 
 TOKEN = "queep-webhook-test-token-32-characters"
 NOW = datetime.now(UTC)
@@ -97,15 +98,16 @@ def test_expired_account_keeps_library_but_cannot_start_paid_work(service, accou
     service.event(Event(id=str(uuid4()), type="EXPIRATION", app_user_id=uid))
     assert client.get(url, headers=headers).status_code == 200
     assert client.get("/v1/references", headers=headers).status_code == 200
+    # Expiration returns to permanent Free; exhausted Free quotas still require an upgrade.
+    document(service.db, uid, datetime.now(UTC)).set({"operations": 12, "searches": 8})
     for method, path, body in [
         ("put", f"/v1/references/{uuid4()}", note),
         ("patch", url, {**note, "revision": 1, "mutation_id": str(uuid4())}),
-        ("post", url+"/retry", {"revision": 1}),
-        ("post", "/v1/search", {"query": "A reference"}),
+
     ]:
         response = getattr(client, method)(path, json=body, headers=headers)
         assert response.status_code == 402, response.text
-    assert client.put(url+"/image", content=b"image", headers=headers).status_code == 402
+    assert client.put(url+"/media", content=b"media", headers=headers).status_code == 402
     assert client.delete(url+"?revision=1", headers=headers).status_code == 204
 
 

@@ -18,6 +18,7 @@ from queep.account_state import deletion_document, require_open
 from queep.config import firebase_app
 from queep.images import Images, prepare
 from queep.repository import Repository
+from queep.usage import inventory, policy, reserve_storage
 
 logger = logging.getLogger(__name__)
 
@@ -155,13 +156,21 @@ class Accounts:
             auth.delete_user(uid, app=firebase_app())
         except auth.UserNotFoundError:
             pass
-        more = self.erase_batch(self.db.collection("jobs").where(
-            filter=FieldFilter("uid", "==", uid)))
+        # Both app environments share account identity; erasure must cover both outboxes.
+        more = False
+        for name in ("jobs", "jobs_testflight"):
+            more = self.erase_batch(self.db.collection(name).where(
+                filter=FieldFilter("uid", "==", uid))) or more
+        more = self.erase_batch(self.db.collection("space_cleanup").where(
+            filter=FieldFilter("uid", "==", uid))) or more
         root = self.db.collection("users").document(uid)
         profile = root.get().to_dict() or {}
-        if prefix := profile.get("avatar_prefix"):
+        prefixes = set(profile.get("avatar_reservations", {}))
+        if profile.get("avatar_prefix"):
+            prefixes.add(profile["avatar_prefix"])
+        for prefix in prefixes:
             self.delete_avatar_objects(uid, prefix)
-        for name in ("references", "usage"):
+        for name in ("references", "usage", "fair_use", "inventory", "spaces"):
             more = self.erase_batch(root.collection(name)) or more
         root.delete()
         self.db.collection("billing_access").document(hashlib.sha256(uid.encode()).hexdigest()).delete()
@@ -259,6 +268,22 @@ class Accounts:
         image = prepare(data)
         prefix = self.avatar_prefix(uid, image.info.sha256)
         require_open(self.db, uid)
+        access = policy(self.db, uid)
+        root = self.db.collection("users").document(uid)
+        size = len(image.original) + len(image.thumbnail)
+
+        @firestore.transactional
+        def reserve(tx):
+            require_open(self.db, uid, tx)
+            current = root.get(transaction=tx).to_dict() or {}
+            reservations = current.get("avatar_reservations", {})
+            if prefix in reservations:
+                return
+            reserve_storage(self.db, uid, tx, access, size, upload=True)
+            reservations = {**reservations, prefix: size}
+            tx.set(root, {"avatar_reservations": reservations,
+                          "avatar_storage_bytes": sum(reservations.values())}, merge=True)
+        self.repo.transact(reserve)
         try:
             for name, content, content_type in (
                 ("original", image.original, image.info.content_type),
@@ -284,6 +309,7 @@ class Accounts:
         old = previous["prefix"]
         if old and old != prefix:
             self.delete_avatar_objects(uid, old)
+            self.release_avatar(uid, old)
         return result
 
     def get_avatar(self, uid, thumbnail=False):
@@ -320,3 +346,21 @@ class Accounts:
         self.repo.transact(write)
         if prefix := previous["prefix"]:
             self.delete_avatar_objects(uid, prefix)
+            self.release_avatar(uid, prefix)
+
+    def release_avatar(self, uid, prefix):
+        root = self.db.collection("users").document(uid)
+
+        @firestore.transactional
+        def release(tx):
+            require_open(self.db, uid, tx)
+            current = root.get(transaction=tx).to_dict() or {}
+            reservations = dict(current.get("avatar_reservations", {}))
+            size = reservations.pop(prefix, 0)
+            if not size:
+                return
+            stock, stored = inventory(self.db, uid, tx)
+            tx.set(stock, {**stored, "storage_bytes": max(0, stored["storage_bytes"] - size)})
+            tx.set(root, {"avatar_reservations": reservations,
+                          "avatar_storage_bytes": sum(reservations.values())}, merge=True)
+        self.repo.transact(release)

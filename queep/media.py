@@ -54,7 +54,8 @@ def probe(path, max_seconds=MAX_SECONDS):
     try:
         metadata = json.loads(raw)
         streams = metadata["streams"]
-        durations = [float(metadata["format"]["duration"])] if metadata.get("format", {}).get("duration") else []
+        duration = metadata.get("format", {}).get("duration")
+        durations = [float(duration)] if duration else []
         durations += [float(s["duration"]) for s in streams if s.get("duration")]
         duration = max(durations) if durations else 0
         if max_seconds is not None and (
@@ -315,6 +316,12 @@ class MediaFiles(Images):
     # The historical image_uploads collection/prefix is the shared asset ledger.
     # Keeping it preserves all existing expiry, account-erasure and late-writer protections.
     prepare = staticmethod(prepare)
+
+    def upload(self, uid, ref_id, title, data, space_ids=()):
+        from queep.billing import Billing
+        from queep.config import Settings
+        Billing(self.db, Settings()).require(uid, "media_av")
+        return super().upload(uid, ref_id, title, data, space_ids)
 
     def kind(self, media):
         return "video" if media.info.content_type == "video/mp4" else "audio"

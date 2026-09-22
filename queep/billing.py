@@ -14,9 +14,10 @@ from uuid import uuid4
 import httpx
 from fastapi import HTTPException
 from google.cloud import firestore
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 from queep.account_state import is_closed, require_open
+from queep.plans import LIMITS, Plan, denied, features
 from queep.repository import Repository
 
 
@@ -26,6 +27,17 @@ class Access(BaseModel):
     expires_at: datetime | None = None
     will_renew: bool = False
     checked_at: datetime
+    plan: Plan = "free"
+
+    @computed_field
+    @property
+    def features(self) -> dict[str, bool]:
+        return features(self.plan)
+
+    @computed_field
+    @property
+    def limits(self) -> dict[str, int]:
+        return LIMITS[self.plan].copy()
 
 
 class Event(BaseModel):
@@ -59,7 +71,15 @@ def timestamp(value):
     return parsed
 
 
-def interpret_customer(data, entitlement, accept_sandbox, now):
+def interpret_customer(data, entitlement, accept_sandbox, now, max_entitlement="queep_max"):
+    for name, plan in ((max_entitlement, "max"), (entitlement, "pro")):
+        access = interpret_entitlement(data, name, accept_sandbox, now)
+        if access.active:
+            return access.model_copy(update={"plan": plan})
+    return Access(active=False, checked_at=now)
+
+
+def interpret_entitlement(data, entitlement, accept_sandbox, now):
     """V1 supports auto-renewing subscriptions, including grace periods."""
     subscriber = data["subscriber"]
     entitlements = subscriber["entitlements"]
@@ -111,7 +131,8 @@ class Billing:
                 )
                 response.raise_for_status()
                 return interpret_customer(response.json(), self.settings.revenuecat_entitlement,
-                                          self.settings.billing_accept_sandbox, datetime.now(UTC))
+                                          self.settings.billing_accept_sandbox, datetime.now(UTC),
+                                          self.settings.revenuecat_max_entitlement)
         except (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError) as error:
             # Never return vendor payloads, tokens or stale access on an upstream failure.
             raise unavailable() from error
@@ -120,7 +141,7 @@ class Billing:
         require_open(self.db, uid)
         now = datetime.now(UTC)
         if self.settings.billing_mode == "development":
-            return Access(mode="development", active=True, checked_at=now)
+            return Access(mode="development", active=True, plan="max", checked_at=now)
         doc = self.document(uid)
         token = uuid4().hex
 
@@ -131,7 +152,7 @@ class Billing:
             if old.get("retry_after", now) > now:
                 raise unavailable()
             cached = old.get("access")
-            if cached and old.get("valid_until", now) > now:
+            if cached and "plan" in cached and old.get("valid_until", now) > now:
                 access = Access.model_validate(cached)
                 unexpired = not access.active or (access.expires_at and access.expires_at > now)
                 # Client refresh is capped to one provider call per 10s per account.
@@ -186,10 +207,11 @@ class Billing:
                                     "lease_until": firestore.DELETE_FIELD})
             self.repo.transact(release)
 
-    def require(self, uid):
-        if not self.access(uid).active:
-            raise HTTPException(402, "Assine ou restaure sua assinatura em Conta → Assinatura. "
-                                "Sua biblioteca continua disponível.")
+    def require(self, uid, feature=None):
+        access = self.access(uid)
+        if feature and not access.features.get(feature, False):
+            raise denied(access.plan, feature)
+        return access
 
     def authenticate_webhook(self, authorization):
         token = self.settings.revenuecat_webhook_token

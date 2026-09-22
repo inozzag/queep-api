@@ -1,5 +1,9 @@
 # Assinaturas — Queep
 
+> GAZ-115: o contrato atual Free/Pro/Max está em [PLANS.md](PLANS.md).
+> Preparação e pendências de publicação: [APPLE-LAUNCH.md](APPLE-LAUNCH.md).
+> As seções abaixo registram a integração original de setembro, anterior aos planos.
+
 ## Implementado
 
 RevenueCat SDK 5.89.0 nos apps Mac/iPhone, com Firebase UID como `appUserID`.

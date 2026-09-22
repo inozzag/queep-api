@@ -17,6 +17,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from queep.account_state import is_closed, require_open
 from queep.models import ImageInfo, Reference
 from queep.repository import Repository, fingerprint, new_job
+from queep.usage import check_inventory, inventory, policy
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
@@ -140,11 +141,14 @@ class Images:
                 raise RuntimeError("Invalid image reservation")
         return prefixes
 
-    def reserve(self, uid, ref_id, title, image):
+    def reserve(self, uid, ref_id, title, image, space_ids=()):
+        access = policy(self.db, uid)
         doc = self.repo.collection(uid).document(ref_id)
         manifest = self.manifest(uid, ref_id)
-        digest = fingerprint({"kind": self.kind(image), "title": title,
-                              "sha256": image.info.sha256})
+        payload = {"kind": self.kind(image), "title": title, "sha256": image.info.sha256}
+        if space_ids:
+            payload["space_ids"] = sorted(set(space_ids))
+        digest = fingerprint(payload)
         now = datetime.now(UTC)
 
         @firestore.transactional
@@ -158,9 +162,13 @@ class Images:
                 raise HTTPException(409, "Identificador de envio já utilizado")
             if upload and (upload["state"] != "pending" or upload["digest"] != digest):
                 raise HTTPException(409, "Identificador de envio já utilizado")
+            from queep.spaces import Spaces
+            Spaces(self.db).require(uid, space_ids, tx)
+            if upload:
+                inventory(self.db, uid, tx)  # Honor a reconciliation lock on resumed uploads too.
             if not upload:
                 from queep.usage import reserve_operation
-                reserve_operation(self.db, uid, tx, now=now,
+                reserve_operation(self.db, uid, tx, now=now, access=access, items=1,
                                   upload_bytes=sum(len(data) for _, data, _ in self.objects(image)),
                                   media_seconds=getattr(image.info, "duration_seconds", 0))
             # Hidden placeholder also reserves the ID against simultaneous note/link creation.
@@ -175,6 +183,8 @@ class Images:
                     "prefix": self.prefix(uid, ref_id, image.info.sha256),
                     "cleanup_after": now + timedelta(hours=1),
                     "settle_at": now + timedelta(minutes=10),
+                    "storage_bytes": sum(len(data) for _, data, _ in self.objects(image)),
+                    "plan": access.plan,
                 },
             )
             return None
@@ -197,9 +207,9 @@ class Images:
         except PreconditionFailed:
             pass
 
-    def upload(self, uid, ref_id, title, data):
+    def upload(self, uid, ref_id, title, data, space_ids=()):
         image = self.prepare(data)
-        digest, existing = self.reserve(uid, ref_id, title, image)
+        digest, existing = self.reserve(uid, ref_id, title, image, space_ids)
         if existing:
             return existing
         prefix = self.prefix(uid, ref_id, image.info.sha256)
@@ -228,6 +238,8 @@ class Images:
                 or upload["digest"] != digest
             ):
                 raise HTTPException(409, "Este envio foi encerrado")
+            from queep.spaces import Spaces
+            Spaces(self.db).require(uid, space_ids, tx)
             record = {
                 "id": ref_id,
                 "kind": self.kind(image),
@@ -244,11 +256,12 @@ class Images:
                 "create_hash": digest,
                 "content_hash": digest,
                 "last_mutation_id": None,
+                "space_ids": sorted(set(space_ids)),
             }
             tx.set(doc, record)
             tx.set(
                 self.repo.job(uid, ref_id),
-                new_job(uid, ref_id, 1, now),
+                new_job(uid, ref_id, 1, now) | {"plan": upload.get("plan", "unknown")},
             )
             tx.update(manifest, {"state": "active", "cleanup_after": firestore.DELETE_FIELD})
             return record
@@ -269,6 +282,7 @@ class Images:
             image = self.prepare(as_jpeg(data))
         info = image.info.model_copy(update={"preview_kind": kind})
         prefix = self.prefix(uid, ref_id, image.info.sha256)
+        self.reserve_preview(uid, ref_id, image)
         for name, content, content_type in self.objects(image):
             self.put_object(f"{prefix}/{name}", content, content_type)
         now = datetime.now(UTC)
@@ -321,6 +335,7 @@ class Images:
             image = self.prepare(as_jpeg(data))
         info = image.info
         prefix = self.prefix(uid, ref_id, image.info.sha256)
+        self.reserve_preview(uid, ref_id, image)
         for name, content, content_type in self.objects(image):
             self.put_object(f"{prefix}/{name}", content, content_type)
         now = datetime.now(UTC)
@@ -358,6 +373,38 @@ class Images:
             return info
 
         return self.repo.transact(write)
+
+    def reserve_preview(self, uid, ref_id, image):
+        """Reserve every live object (including social thumbnails) before Storage writes."""
+        access = policy(self.db, uid)
+        manifest = self.manifest(uid, ref_id)
+        prefix = self.prefix(uid, ref_id, image.info.sha256)
+        size = sum(len(data) for _, data, _ in self.objects(image))
+
+        @firestore.transactional
+        def reserve(tx):
+            require_open(self.db, uid, tx)
+            record = self.repo.collection(uid).document(ref_id).get(transaction=tx).to_dict()
+            old = manifest.get(transaction=tx).to_dict() or {}
+            if (not record or record.get("deleted") or record.get("kind") != "link"
+                    or old.get("state", "active") != "active"):
+                raise HTTPException(409, "Referência indisponível")
+            prefixes = list(old.get("prefixes") or [])
+            if old.get("prefix") and old["prefix"] not in prefixes:
+                prefixes.append(old["prefix"])
+            stock, stored = inventory(self.db, uid, tx)
+            if prefix in prefixes:
+                tx.update(manifest, {"settle_at": datetime.now(UTC) + timedelta(minutes=10)})
+                return
+            check_inventory(access, stored, storage_bytes=size)
+            tx.set(stock, {**stored, "storage_bytes": stored.get("storage_bytes", 0) + size})
+            prefixes.append(prefix)
+            tx.set(manifest, {**old, "uid": uid, "reference_id": ref_id,
+                              "state": "active", "digest": old.get("digest", image.info.sha256),
+                              "prefix": prefixes[0], "prefixes": prefixes,
+                              "storage_bytes": old.get("storage_bytes", 0) + size,
+                              "settle_at": datetime.now(UTC) + timedelta(minutes=10)})
+        self.repo.transact(reserve)
 
     def read(self, uid, ref_id, thumbnail=False, index=0, role="gallery"):
         reference = self.repo.get(uid, ref_id)
@@ -398,6 +445,8 @@ class Images:
                     return None
                 # Tombstone blocks future reservations before any object is removed.
                 upload.update(state="cleanup", settle_at=now + timedelta(minutes=10))
+                stock, stored = inventory(self.db, uid, tx)
+                tx.set(stock, {**stored, "items": max(0, stored.get("items", 0) - 1)})
                 tx.set(doc, {"deleted": True, "revision": 1, "updated_at": now})
                 tx.update(manifest, {"state": "cleanup", "settle_at": upload["settle_at"]})
             return upload
@@ -417,7 +466,16 @@ class Images:
             return False
         if upload["settle_at"] <= now:
             # After the bounded upload window, the tombstone is sufficient to block recreation.
-            manifest.delete()
+            @firestore.transactional
+            def release(tx):
+                current = manifest.get(transaction=tx).to_dict()
+                if not current or current["state"] != "cleanup" or current["settle_at"] > now:
+                    return
+                stock, stored = inventory(self.db, uid, tx)
+                tx.set(stock, {**stored, "storage_bytes": max(
+                    0, stored.get("storage_bytes", 0) - current.get("storage_bytes", 0))})
+                tx.delete(manifest)
+            self.repo.transact(release)
         return True
 
     def sweep(self, limit=200):

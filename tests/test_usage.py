@@ -6,14 +6,16 @@ import pytest
 from fastapi import HTTPException
 from google.api_core.exceptions import ServiceUnavailable
 
+from queep.billing import Access, Billing
 from queep.budget import Budget
 from queep.config import Settings, database, image_bucket
 from queep.images import Images
 from queep.jobs import Jobs
 from queep.media import MediaFiles
 from queep.models import Capture
+from queep.plans import month_window
 from queep.repository import Repository
-from queep.usage import document, snapshot
+from queep.usage import daily_document, document, snapshot
 from tests.test_images import picture
 from tests.test_media import wav
 
@@ -21,11 +23,13 @@ from tests.test_media import wav
 def test_limits_are_private_and_readable_without_paid_access(client, account, monkeypatch):
     uid, headers = account
     monkeypatch.setenv("QUEEP_BILLING_MODE", "required")
+    monkeypatch.setattr(Billing, "customer",
+                        lambda self, uid, now: Access(active=False, checked_at=now))
     assert client.get("/v1/usage").status_code == 401
     result = client.get("/v1/usage", headers=headers)
     assert result.status_code == 200
     assert result.headers["cache-control"] == "no-store"
-    assert result.json()["counters"]["operations"] == {"used": 0, "limit": 100}
+    assert result.json()["counters"]["operations"] == {"used": 0, "limit": 12}
 
 
 def test_concurrent_operations_cannot_overrun_limit(account, monkeypatch):
@@ -91,7 +95,7 @@ def test_failed_upload_reserves_once_and_retry_remains_available(account, monkey
 def test_upload_budget_blocks_before_storage_or_placeholder(account, monkeypatch):
     uid, _ = account
     now = datetime.now(UTC)
-    document(database(), uid, now).set({"upload_bytes": 100 * 1024 * 1024})
+    daily_document(database(), uid, now).set({"upload_bytes": 100 * 1024 * 1024})
     service = Images(database(), image_bucket())
     ref_id = str(uuid4())
     monkeypatch.setattr(service, "put_object", lambda *_: pytest.fail("Must not write Storage"))
@@ -134,6 +138,6 @@ def test_search_updates_preserve_upload_counters_and_accounts_are_isolated(accou
     assert doc.get().to_dict()["expires_at"] > now + timedelta(days=29)
     for record in (
         snapshot(database(), str(uuid4()), Settings()),
-        snapshot(database(), uid, Settings(), now=now + timedelta(days=1)),
+        snapshot(database(), uid, Settings(), now=month_window(now)[1]),
     ):
         assert all(counter["used"] == 0 for counter in record["counters"].values())

@@ -7,8 +7,10 @@ from fastapi import HTTPException
 from google.cloud import firestore
 
 from queep.account_state import require_open
+from queep.cost_context import current
+from queep.plans import denied, month_window
 from queep.repository import Repository
-from queep.usage import document, exceeded, window
+from queep.usage import daily_document, document, exceeded, policy, window
 
 
 class Budget:
@@ -32,7 +34,8 @@ class Budget:
                 raise HTTPException(429, "A IA atingiu o limite de uso de hoje. Tente amanhã.")
             tx.set(day, {"used": total + self.ALLOWANCE, "updated_at": now})
             tx.set(ticket, {"day": day.id, "state": "reserved", "amount": self.ALLOWANCE,
-                            "expires_at": now + timedelta(days=30)})
+                            "created_at": now, **(current.get() or {}),
+                            "expires_at": now + timedelta(days=90)})
         self.repo.transact(write)
         return ticket
 
@@ -46,26 +49,34 @@ class Budget:
             total = day.get(transaction=tx).to_dict()["used"]
             amount = old["amount"] if cost is None else cost
             tx.update(day, {"used": max(0.0, total - old["amount"] + amount)})
-            tx.update(ticket, {"state": "settled", "amount": amount, "cost_known": cost is not None,
+            tx.update(ticket, {"state": "settled", "amount": amount,
+                               "cost_known": cost is not None, "cost_usd": cost,
                                **metadata})
         self.repo.transact(write)
 
     def rate_limit(self, uid):
         """Per-account search limit, checked before paid calls."""
-        now, reset = window()
+        access = policy(self.db, uid)
+        now, reset = month_window()
         doc = document(self.db, uid, now)
+        daily = daily_document(self.db, uid, now)
 
         @firestore.transactional
         def write(tx):
             require_open(self.db, uid, tx)
             old = doc.get(transaction=tx).to_dict() or {}
+            abuse = daily.get(transaction=tx).to_dict() or {}
             last = old.get("last_search")
-            if old.get("searches", 0) >= self.search_daily_limit:
+            if old.get("searches", 0) >= access.limits["searches"]:
+                raise denied(access.plan, "searches", now=now)
+            if abuse.get("searches", 0) >= self.search_daily_limit:
                 raise exceeded("Limite diário de buscas atingido. Consulte Uso e privacidade.",
-                               reset, now)
+                               window(now)[1], now)
             if last and (now-last).total_seconds() < 1:
                 raise HTTPException(429, "Aguarde um instante antes de buscar novamente.",
                                     headers={"Retry-After": "1"})
             tx.set(doc, {"searches": old.get("searches", 0) + 1, "last_search": now,
-                         "expires_at": reset + timedelta(days=30)}, merge=True)
+                         "expires_at": reset + timedelta(days=90)}, merge=True)
+            tx.set(daily, {"searches": abuse.get("searches", 0) + 1,
+                           "expires_at": window(now)[1] + timedelta(days=30)}, merge=True)
         self.repo.transact(write)

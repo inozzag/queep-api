@@ -11,6 +11,7 @@ class Capture(BaseModel):
     title: str = Field(default="", max_length=200)
     text: str = Field(default="", max_length=30000)
     url: HttpUrl | None = None
+    space_ids: list[UUID] = Field(default_factory=list, max_length=40)
 
     @model_validator(mode="after")
     def validate_content(self):
@@ -102,6 +103,8 @@ class Reference(BaseModel):
     revision: int
     created_at: datetime
     updated_at: datetime
+    space_ids: list[str] = Field(default_factory=list)
+    archived_at: datetime | None = None
     analysis: Interpretation | None = None
     image: ImageInfo | None = None
     images: list[ImageInfo] | None = Field(default=None, max_length=4)
@@ -119,6 +122,7 @@ class Library(BaseModel):
 class Search(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     query: str = Field(min_length=2, max_length=500)
+    space_id: UUID | None = None
 
 
 class SearchResults(BaseModel):
@@ -127,6 +131,49 @@ class SearchResults(BaseModel):
     candidate_limit: int = 10
 
 
+class ArchiveEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    archived: bool
+
+
+class BatchArchive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    ids: list[UUID] = Field(min_length=1, max_length=50)
+    archived: bool
+
+
 class RetryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
+
+
+class SpaceName(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=40)
+
+
+class SpaceEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    name: str | None = Field(default=None, min_length=1, max_length=40)
+    sort_index: int | None = Field(default=None, ge=0, le=39)
+
+
+class Space(BaseModel):
+    id: str
+    name: str
+    sort_index: int
+    created_at: datetime
+    updated_at: datetime
+    reference_count: int = 0
+
+
+class SpaceMembership(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    add: list[UUID] = Field(default_factory=list, max_length=40)
+    remove: list[UUID] = Field(default_factory=list, max_length=40)
+
+    @model_validator(mode="after")
+    def disjoint(self):
+        if set(self.add) & set(self.remove):
+            raise ValueError("Um Space não pode ser adicionado e removido ao mesmo tempo")
+        return self
