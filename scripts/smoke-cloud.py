@@ -122,7 +122,7 @@ def main():
         assert reference["status"] in ("queued", "processing", "ready")
         for suffix in ("", "?thumbnail=true"):
             pixels = api("GET", f"{url}/image{suffix}", token=second_session, binary=True)
-            assert Image.open(BytesIO(pixels)).size == ((560, 373) if suffix else (900, 600))
+            assert Image.open(BytesIO(pixels)).size == (900, 600)
         api("GET", f"{url}/image", expected=401)
         api("GET", f"{url}/image", token=users[1][0]["idToken"], expected=404)
         key = hashlib.sha256(f"{owner['localId']}/{ref_id}".encode()).hexdigest()

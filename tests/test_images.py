@@ -28,6 +28,13 @@ def media():
     return Images(database(), image_bucket())
 
 
+def test_thumbnail_stays_sharp_up_to_card_size():
+    prepared = prepare(picture(size=(2400, 1600)))
+    assert Image.open(BytesIO(prepared.original)).size == (2400, 1600)
+    assert Image.open(BytesIO(prepared.thumbnail)).size == (1440, 960)
+    assert max(Image.open(BytesIO(prepare(picture()).thumbnail)).size) == 900
+
+
 def test_upload_is_private_and_retrievable_in_another_session(client, account):
     uid, headers = account
     ref_id = str(uuid4())
@@ -44,7 +51,7 @@ def test_upload_is_private_and_retrievable_in_another_session(client, account):
         assert result.status_code == 200
         assert result.headers["cache-control"] == "no-store"
         image = Image.open(BytesIO(result.content))
-        assert image.size == ((560, 373) if thumbnail else (900, 600))
+        assert image.size == (900, 600)
         assert "private" not in image.info and not image.getexif()
     assert client.get(path).status_code == 401
     r = httpx.post(

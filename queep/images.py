@@ -3,7 +3,9 @@
 import hashlib
 import logging
 import re
+import threading
 import warnings
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
@@ -22,8 +24,13 @@ from queep.usage import check_inventory, inventory, policy
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
 MAX_GALLERY = 4
+CARD_EDGE = 1440
+SHARP_EDGE = 800
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
 logger = logging.getLogger(__name__)
+_preview_cache: OrderedDict[str, bytes] = OrderedDict()
+_preview_lock = threading.Lock()
+_preview_slots = threading.BoundedSemaphore(2)
 
 
 @dataclass
@@ -59,8 +66,8 @@ def prepare(data: bytes) -> PreparedImage:
 
                 original = encode(clean, 92)
                 width, height = clean.size
-                clean.thumbnail((560, 560), Image.Resampling.LANCZOS)
-                thumbnail = encode(clean, 80)
+                clean.thumbnail((CARD_EDGE, CARD_EDGE), Image.Resampling.LANCZOS)
+                thumbnail = encode(clean, 84)
         if len(original) > MAX_BYTES:
             raise HTTPException(413, "A imagem é muito grande. Reduza a resolução")
         return PreparedImage(
@@ -83,6 +90,58 @@ def prepare(data: bytes) -> PreparedImage:
         Image.DecompressionBombWarning,
     ) as error:
         raise HTTPException(415, "Não foi possível ler esta imagem. Escolha JPEG ou PNG") from error
+
+
+def preview_edge(data: bytes) -> int:
+    try:
+        with Image.open(BytesIO(data)) as image:
+            return max(image.size)
+    except (UnidentifiedImageError, OSError, ValueError):
+        return 0
+
+
+def jpeg_card(data: bytes, edge: int = CARD_EDGE) -> bytes:
+    """A display-sized JPEG. Gallery cards need more than the legacy 560 px preview."""
+    with Image.open(BytesIO(data)) as image:
+        image.load()
+        frame = ImageOps.exif_transpose(image)
+        if "A" in frame.getbands():
+            background = Image.new("RGB", frame.size, "white")
+            background.paste(frame, mask=frame.getchannel("A"))
+            frame = background
+        else:
+            frame = frame.convert("RGB")
+        frame.thumbnail((edge, edge), Image.Resampling.LANCZOS)
+        buffer = BytesIO()
+        frame.save(buffer, format="JPEG", quality=84, optimize=True)
+        return buffer.getvalue()
+
+
+def cached_preview(key: str, build) -> bytes | None:
+    with _preview_lock:
+        cached = _preview_cache.get(key)
+        if cached is not None:
+            _preview_cache.move_to_end(key)
+            return cached
+    if not _preview_slots.acquire(timeout=12):
+        return None
+    try:
+        with _preview_lock:
+            cached = _preview_cache.get(key)
+            if cached is not None:
+                _preview_cache.move_to_end(key)
+                return cached
+        data = build()
+        if not data:
+            return None
+        with _preview_lock:
+            _preview_cache[key] = data
+            _preview_cache.move_to_end(key)
+            while len(_preview_cache) > 24:
+                _preview_cache.popitem(last=False)
+        return data
+    finally:
+        _preview_slots.release()
 
 
 def as_jpeg(data: bytes) -> bytes:
@@ -417,15 +476,56 @@ class Images:
             if not gallery or index < 0 or index >= len(gallery):
                 raise HTTPException(404, "Imagem não encontrada")
             info = gallery[index]
+        prefix = self.prefix(uid, ref_id, info.sha256)
         name = "thumbnail" if thumbnail else "original"
-        path = f"{self.prefix(uid, ref_id, info.sha256)}/{name}"
+        data = self._download(f"{prefix}/{name}")
+        needs_card = (
+            thumbnail and role != "author"
+            and max(info.width, info.height) > SHARP_EDGE
+            and preview_edge(data) < SHARP_EDGE
+        )
+        if needs_card:
+            sharp = self._card(prefix)
+            if sharp:
+                return sharp, "image/jpeg"
+        return data, info.content_type
+
+    def _download(self, path):
         try:
-            data = self.bucket.blob(path).download_as_bytes(timeout=20, retry=None)
+            return self.bucket.blob(path).download_as_bytes(timeout=20, retry=None)
         except NotFound as error:
             raise HTTPException(404, "Imagem não encontrada") from error
         except GoogleAPICallError as error:
             raise HTTPException(503, "Não foi possível carregar a imagem") from error
-        return data, info.content_type
+
+    def _card(self, prefix):
+        """Build a 1440 px preview once for legacy 560 px thumbnails and keep it next to them."""
+        def build():
+            card_path = f"{prefix}/card"
+            blob = self.bucket.blob(card_path)
+            try:
+                return blob.download_as_bytes(timeout=20, retry=None)
+            except NotFound:
+                pass
+            except GoogleAPICallError:
+                logger.warning("Card preview unavailable", exc_info=True)
+                return None
+            try:
+                original = self._download(f"{prefix}/original")
+                card = jpeg_card(original)
+            except HTTPException:
+                return None
+            try:
+                blob.upload_from_string(card, content_type="image/jpeg", timeout=20)
+            except GoogleAPICallError:
+                logger.warning("Card preview was not stored", exc_info=True)
+            return card
+
+        try:
+            return cached_preview(f"{prefix}/card", build)
+        except Exception:
+            logger.warning("Card preview failed", exc_info=True)
+            return None
 
     def cleanup(self, uid, ref_id, now=None):
         now = now or datetime.now(UTC)
@@ -456,7 +556,7 @@ class Images:
             return False
         try:
             for prefix in self.object_prefixes(self.repo.job(uid, ref_id).id, upload):
-                for name in ("original", "thumbnail"):
+                for name in ("original", "thumbnail", "card"):
                     try:
                         self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
                     except NotFound:

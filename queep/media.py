@@ -12,7 +12,7 @@ from pathlib import Path
 from fastapi import HTTPException
 from google.api_core.exceptions import GoogleAPICallError, NotFound
 
-from queep.images import Images
+from queep.images import CARD_EDGE, SHARP_EDGE, Images, cached_preview, preview_edge
 from queep.models import MediaInfo
 
 MAX_BYTES = 25 * 1024 * 1024
@@ -79,6 +79,25 @@ def probe(path, max_seconds=MAX_SECONDS):
         return duration, video, bool(audios)
     except (ValueError, KeyError, TypeError) as error:
         raise HTTPException(415, "Arquivo de áudio ou vídeo inválido.") from error
+
+
+def poster_from_video(data: bytes) -> bytes:
+    with tempfile.TemporaryDirectory(prefix="queep-poster-") as folder:
+        source = Path(folder) / "input.mp4"
+        thumb = Path(folder) / "thumbnail.jpg"
+        source.write_bytes(data)
+        ffmpeg(
+            source,
+            "-frames:v",
+            "1",
+            "-vf",
+            f"scale={CARD_EDGE}:{CARD_EDGE}:force_original_aspect_ratio=decrease",
+            "-q:v",
+            "3",
+            thumb,
+            timeout=20,
+        )
+        return thumb.read_bytes()
 
 
 def ffmpeg(path, *output, timeout=40, seek=None):
@@ -158,9 +177,9 @@ def prepare(data):
                 "-frames:v",
                 "1",
                 "-vf",
-                "scale=560:560:force_original_aspect_ratio=decrease",
+                "scale=1440:1440:force_original_aspect_ratio=decrease",
                 "-q:v",
-                "4",
+                "3",
                 thumb,
             )
             thumbnail = thumb.read_bytes()
@@ -339,12 +358,44 @@ class MediaFiles(Images):
         reference = self.repo.get(uid, ref_id)
         if not reference.media or (thumbnail and reference.kind != "video"):
             raise HTTPException(404, "Mídia não encontrada")
+        prefix = self.prefix(uid, ref_id, reference.media.sha256)
         name = "thumbnail" if thumbnail else "original"
-        path = f"{self.prefix(uid, ref_id, reference.media.sha256)}/{name}"
+        path = f"{prefix}/{name}"
         try:
             data = self.bucket.blob(path).download_as_bytes(timeout=30, retry=None)
         except NotFound as error:
             raise HTTPException(404, "Mídia não encontrada") from error
         except GoogleAPICallError as error:
             raise HTTPException(503, "Não foi possível carregar a mídia") from error
+        video_edge = max(reference.media.width or 0, reference.media.height or 0)
+        if thumbnail and video_edge > SHARP_EDGE and preview_edge(data) < SHARP_EDGE:
+            sharp = self._poster(prefix)
+            if sharp:
+                return sharp, "image/jpeg"
         return data, "image/jpeg" if thumbnail else reference.media.content_type
+
+    def _poster(self, prefix):
+        def build():
+            card_path = f"{prefix}/card"
+            blob = self.bucket.blob(card_path)
+            try:
+                return blob.download_as_bytes(timeout=20, retry=None)
+            except NotFound:
+                pass
+            except GoogleAPICallError:
+                return None
+            try:
+                source = self.bucket.blob(f"{prefix}/original")
+                card = poster_from_video(source.download_as_bytes(timeout=30, retry=None))
+            except (HTTPException, GoogleAPICallError, OSError):
+                return None
+            try:
+                blob.upload_from_string(card, content_type="image/jpeg", timeout=20)
+            except GoogleAPICallError:
+                pass
+            return card
+
+        try:
+            return cached_preview(f"{prefix}/card", build)
+        except Exception:
+            return None

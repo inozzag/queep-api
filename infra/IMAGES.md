@@ -3,7 +3,8 @@
 - App aceita JPEG, PNG e HEIC estáticos de até 32 MiB. Converte orientação e reduz
   o maior lado para 4096 px; remove metadados de origem. HEIC vira JPEG/PNG.
 - API aceita JPEG/PNG de até 12 MiB e 20 milhões de pixels; decodifica o arquivo
-  inteiro, rejeita animações, normaliza e cria miniatura de até 560 px. Preserva alpha.
+  inteiro, rejeita animações, normaliza e cria miniatura de até 1440 px. Preserva alpha.
+  Miniaturas antigas de 560 px ganham uma prévia `card` de até 1440 px na primeira leitura.
 - Arquivos são versões otimizadas para referências, não cópias arquivísticas dos
   originais. Leitura de texto, interpretação e embeddings são assíncronos; [IA](AI.md).
 - O upload passa pela API. Vídeos curtos usam o mesmo ciclo de vida, com limites
