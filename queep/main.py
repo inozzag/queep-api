@@ -28,6 +28,8 @@ from queep.models import (
     ImageInfo,
     Library,
     MetadataEdit,
+    OnboardingProfile,
+    OnboardingRecord,
     Reference,
     RetryAnalysis,
     Search,
@@ -179,6 +181,19 @@ def cancel_account_deletion(
     uid = account_claims(credentials, recent=True)["uid"]
     return Accounts(database(), image_bucket(), Settings()).cancel(
         uid, change.version, str(change.operation_id))
+
+
+@app.get("/v1/account/onboarding")
+def read_onboarding(uid: UID):
+    record = Accounts(database(), image_bucket(), Settings()).get_onboarding(uid)
+    if not record:
+        return Response(status_code=204)
+    return record
+
+
+@app.put("/v1/account/onboarding", response_model=OnboardingRecord)
+def write_onboarding(profile: OnboardingProfile, uid: UID):
+    return Accounts(database(), image_bucket(), Settings()).save_onboarding(uid, profile)
 
 
 @app.get("/v1/account")

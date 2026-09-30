@@ -1,3 +1,4 @@
+import re
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
@@ -145,6 +146,28 @@ class BatchArchive(BaseModel):
 class RetryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
+
+
+class OnboardingProfile(BaseModel):
+    """Answers collected before the first save. The phone stays on the account document."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    phone: str
+    source: Literal["anuncio", "twitter", "instagram", "amigo", "ai_chat"]
+    work: Literal["marketing", "design", "produto", "conteudo", "educacao", "outro"]
+
+    @field_validator("phone")
+    @classmethod
+    def normalize_phone(cls, value: str) -> str:
+        raw = value.strip()
+        digits = re.sub(r"\D", "", raw)
+        if not 8 <= len(digits) <= 15:
+            raise ValueError("Informe um telefone válido")
+        return f"+{digits}" if raw.startswith("+") else digits
+
+
+class OnboardingRecord(OnboardingProfile):
+    completed_at: datetime
 
 
 class SpaceName(BaseModel):

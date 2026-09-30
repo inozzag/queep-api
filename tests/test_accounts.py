@@ -246,6 +246,37 @@ def test_avatar_round_trip_survives_replace_and_is_removed_with_the_account(
     assert not list(service.bucket.list_blobs(prefix=prefix))
 
 
+def test_onboarding_profile_normalizes_phone():
+    from pydantic import ValidationError
+
+    from queep.models import OnboardingProfile
+
+    profile = OnboardingProfile(phone="+55 (11) 98888-7777", source="amigo", work="design")
+    assert profile.phone == "+5511988887777"
+    with pytest.raises(ValidationError):
+        OnboardingProfile(phone="123", source="amigo", work="design")
+    with pytest.raises(ValidationError):
+        OnboardingProfile(phone="11988887777", source="tiktok", work="design")
+
+
+def test_onboarding_is_saved_on_the_account_and_removed_with_it(client, account, service):
+    uid, headers = account
+    assert client.get("/v1/account/onboarding", headers=headers).status_code == 204
+    saved = client.put("/v1/account/onboarding", headers=headers, json={
+        "phone": "11988887777", "source": "ai_chat", "work": "produto"})
+    assert saved.status_code == 200
+    assert saved.json()["phone"] == "11988887777"
+    assert saved.json()["source"] == "ai_chat"
+    again = client.get("/v1/account/onboarding", headers=headers)
+    assert again.status_code == 200 and again.json()["work"] == "produto"
+    rejected = client.put("/v1/account/onboarding", headers=headers, json={
+        "phone": "12", "source": "amigo", "work": "design"})
+    assert rejected.status_code == 422
+    service.request(uid, immediate=True)
+    complete(service, uid)
+    assert not database().collection("users").document(uid).get().exists
+
+
 def test_provider_requirement_cannot_disappear_with_runtime_config(account, service):
     uid = account[0]
     service.settings.revenuecat_project_id = "original-project"

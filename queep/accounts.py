@@ -15,6 +15,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import deletion_document, require_open
+from queep.models import OnboardingProfile
 from queep.config import firebase_app
 from queep.images import Images, prepare
 from queep.repository import Repository
@@ -364,3 +365,15 @@ class Accounts:
             tx.set(root, {"avatar_reservations": reservations,
                           "avatar_storage_bytes": sum(reservations.values())}, merge=True)
         self.repo.transact(release)
+
+    def get_onboarding(self, uid):
+        require_open(self.db, uid)
+        record = self.db.collection("users").document(uid).get().to_dict() or {}
+        return record.get("onboarding")
+
+    def save_onboarding(self, uid, profile: OnboardingProfile):
+        require_open(self.db, uid)
+        now = datetime.now(UTC)
+        stored = {**profile.model_dump(), "completed_at": now}
+        self.db.collection("users").document(uid).set({"onboarding": stored}, merge=True)
+        return stored
