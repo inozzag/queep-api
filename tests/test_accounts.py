@@ -253,10 +253,17 @@ def test_onboarding_profile_normalizes_phone():
 
     profile = OnboardingProfile(phone="+55 (11) 98888-7777", source="amigo", work="design")
     assert profile.phone == "+5511988887777"
+    assert OnboardingProfile(phone="11 98888-7777", source="amigo", work="design").phone == "+5511988887777"
+    with pytest.raises(ValidationError):
+        OnboardingProfile(phone="89232123", source="amigo", work="design")
     with pytest.raises(ValidationError):
         OnboardingProfile(phone="123", source="amigo", work="design")
     with pytest.raises(ValidationError):
-        OnboardingProfile(phone="11988887777", source="tiktok", work="design")
+        OnboardingProfile(phone="11988887777", source="outdoor", work="design")
+    written = OnboardingProfile(phone="11988887777", source="amigo", work="outro", work_detail=" Ilustração ")
+    assert written.work_detail == "Ilustração"
+    with pytest.raises(ValidationError):
+        OnboardingProfile(phone="11988887777", source="amigo", work="outro")
 
 
 def test_onboarding_is_saved_on_the_account_and_removed_with_it(client, account, service):
@@ -265,7 +272,7 @@ def test_onboarding_is_saved_on_the_account_and_removed_with_it(client, account,
     saved = client.put("/v1/account/onboarding", headers=headers, json={
         "phone": "11988887777", "source": "ai_chat", "work": "produto"})
     assert saved.status_code == 200
-    assert saved.json()["phone"] == "11988887777"
+    assert saved.json()["phone"] == "+5511988887777"
     assert saved.json()["source"] == "ai_chat"
     again = client.get("/v1/account/onboarding", headers=headers)
     assert again.status_code == 200 and again.json()["work"] == "produto"

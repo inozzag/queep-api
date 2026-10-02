@@ -148,22 +148,92 @@ class RetryAnalysis(BaseModel):
     revision: int = Field(ge=1)
 
 
+_BR_AREA_CODES = {
+    "11", "12", "13", "14", "15", "16", "17", "18", "19",
+    "21", "22", "24", "27", "28",
+    "31", "32", "33", "34", "35", "37", "38",
+    "41", "42", "43", "44", "45", "46", "47", "48", "49",
+    "51", "53", "54", "55",
+    "61", "62", "63", "64", "65", "66", "67", "68", "69",
+    "71", "73", "74", "75", "77", "79",
+    "81", "82", "83", "84", "85", "86", "87", "88", "89",
+    "91", "92", "93", "94", "95", "96", "97", "98", "99",
+}
+# Longest dial codes first so 351 matches before a shorter prefix.
+_DIAL_LENGTHS = (
+    ("971", 9, 9), ("598", 8, 8), ("595", 9, 9), ("593", 9, 9), ("591", 8, 8),
+    ("358", 9, 9), ("353", 9, 9), ("351", 9, 9), ("258", 9, 9), ("245", 7, 7),
+    ("244", 9, 9), ("238", 7, 7), ("972", 9, 9),
+    ("90", 10, 10), ("86", 11, 11), ("82", 9, 10), ("81", 10, 10), ("64", 8, 10),
+    ("61", 9, 9), ("58", 10, 10), ("57", 10, 10), ("56", 9, 9), ("55", 10, 11),
+    ("54", 10, 10), ("52", 10, 10), ("51", 9, 9), ("49", 10, 11), ("48", 9, 9),
+    ("47", 8, 8), ("46", 9, 9), ("45", 8, 8), ("44", 10, 10), ("43", 10, 10),
+    ("41", 9, 9), ("39", 9, 10), ("34", 9, 9), ("33", 9, 9), ("32", 9, 9),
+    ("31", 9, 9), ("27", 9, 9), ("1", 10, 10),
+)
+
+
+def _valid_brazil_national(national: str) -> bool:
+    if len(national) not in (10, 11) or national[:2] not in _BR_AREA_CODES:
+        return False
+    subscriber = national[2:]
+    if len(subscriber) == 9:
+        return subscriber.startswith("9")
+    return subscriber[:1] in "2345"
+
+
+def _normalize_onboarding_phone(value: str) -> str:
+    raw = value.strip()
+    digits = re.sub(r"\D", "", raw)
+    if raw.startswith("00"):
+        digits = digits[2:]
+        raw = "+" + digits
+    if raw.startswith("+"):
+        for dial, low, high in _DIAL_LENGTHS:
+            if not digits.startswith(dial):
+                continue
+            national = digits[len(dial):]
+            if not low <= len(national) <= high:
+                continue
+            if dial == "55" and not _valid_brazil_national(national):
+                continue
+            return "+" + digits
+        raise ValueError("Informe um telefone válido")
+    if _valid_brazil_national(digits):
+        return "+55" + digits
+    raise ValueError("Informe um telefone válido")
+
+
 class OnboardingProfile(BaseModel):
     """Answers collected before the first save. The phone stays on the account document."""
 
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     phone: str
-    source: Literal["anuncio", "twitter", "instagram", "amigo", "ai_chat"]
-    work: Literal["marketing", "design", "produto", "conteudo", "educacao", "outro"]
+    source: Literal[
+        "anuncio", "instagram", "tiktok", "twitter", "youtube", "google",
+        "linkedin", "amigo", "ai_chat", "podcast", "app_store",
+    ]
+    work: Literal[
+        "design", "marketing", "conteudo", "social", "fotografia", "publicidade",
+        "produto", "empreendedor", "educacao", "outro",
+    ]
+    work_detail: str | None = None
 
     @field_validator("phone")
     @classmethod
     def normalize_phone(cls, value: str) -> str:
-        raw = value.strip()
-        digits = re.sub(r"\D", "", raw)
-        if not 8 <= len(digits) <= 15:
-            raise ValueError("Informe um telefone válido")
-        return f"+{digits}" if raw.startswith("+") else digits
+        return _normalize_onboarding_phone(value)
+
+    @model_validator(mode="after")
+    def normalize_work_detail(self):
+        detail = (self.work_detail or "").strip()
+        if self.work != "outro":
+            self.work_detail = None
+            return self
+        if not 2 <= len(detail) <= 40:
+            raise ValueError("Diga com o que você trabalha")
+        self.work_detail = detail
+        return self
 
 
 class OnboardingRecord(OnboardingProfile):
