@@ -253,14 +253,17 @@ def test_onboarding_profile_normalizes_phone():
 
     profile = OnboardingProfile(phone="+55 (11) 98888-7777", source="amigo", work="design")
     assert profile.phone == "+5511988887777"
-    assert OnboardingProfile(phone="11 98888-7777", source="amigo", work="design").phone == "+5511988887777"
+    national = OnboardingProfile(phone="11 98888-7777", source="amigo", work="design")
+    assert national.phone == "+5511988887777"
     with pytest.raises(ValidationError):
         OnboardingProfile(phone="89232123", source="amigo", work="design")
     with pytest.raises(ValidationError):
         OnboardingProfile(phone="123", source="amigo", work="design")
     with pytest.raises(ValidationError):
         OnboardingProfile(phone="11988887777", source="outdoor", work="design")
-    written = OnboardingProfile(phone="11988887777", source="amigo", work="outro", work_detail=" Ilustração ")
+    written = OnboardingProfile(
+        phone="11988887777", source="amigo", work="outro", work_detail=" Ilustração ",
+    )
     assert written.work_detail == "Ilustração"
     with pytest.raises(ValidationError):
         OnboardingProfile(phone="11988887777", source="amigo", work="outro")

@@ -15,9 +15,9 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import deletion_document, require_open
-from queep.models import OnboardingProfile
 from queep.config import firebase_app
 from queep.images import Images, prepare
+from queep.models import OnboardingProfile
 from queep.repository import Repository
 from queep.usage import inventory, policy, reserve_storage
 
