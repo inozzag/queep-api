@@ -46,6 +46,7 @@ class MetadataEdit(BaseModel):
 class Interpretation(BaseModel):
     summary: str = Field(max_length=4000)
     headline: str = Field(default="", max_length=80)
+    portrait: str = Field(default="", max_length=500)
     topics: list[str] = Field(default_factory=list, max_length=30)
     entities: list[str] = Field(default_factory=list, max_length=30)
     usefulness: list[str] = Field(default_factory=list, max_length=20)

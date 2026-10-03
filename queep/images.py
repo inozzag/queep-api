@@ -23,10 +23,11 @@ from queep.usage import check_inventory, inventory, policy
 
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
+OPEN_PIXELS = 48_000_000
 MAX_GALLERY = 4
 CARD_EDGE = 1440
 SHARP_EDGE = 800
-Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+Image.MAX_IMAGE_PIXELS = OPEN_PIXELS
 logger = logging.getLogger(__name__)
 _preview_cache: OrderedDict[str, bytes] = OrderedDict()
 _preview_lock = threading.Lock()
@@ -49,7 +50,7 @@ def prepare(data: bytes) -> PreparedImage:
             with Image.open(BytesIO(data)) as source:
                 if source.format not in {"JPEG", "PNG"} or getattr(source, "n_frames", 1) != 1:
                     raise HTTPException(415, "Envie uma imagem estática JPEG ou PNG")
-                if source.width * source.height > MAX_PIXELS:
+                if source.width * source.height > OPEN_PIXELS:
                     raise HTTPException(413, "A imagem tem resolução muito alta")
                 source.load()  # Validate the entire file, not its extension or MIME header.
                 oriented = ImageOps.exif_transpose(source)
@@ -148,6 +149,8 @@ def as_jpeg(data: bytes) -> bytes:
     with Image.open(BytesIO(data)) as source:
         source.load()
         rgb = ImageOps.exif_transpose(source).convert("RGB")
+        if rgb.width * rgb.height > MAX_PIXELS:
+            rgb.thumbnail((4096, 4096), Image.Resampling.LANCZOS)
         buffer = BytesIO()
         rgb.save(buffer, format="JPEG", quality=90)
         return buffer.getvalue()
@@ -465,8 +468,22 @@ class Images:
                               "settle_at": datetime.now(UTC) + timedelta(minutes=10)})
         self.repo.transact(reserve)
 
+    def store_clip(self, uid, ref_id, sha256, data):
+        """Keep the public mp4 next to its poster so the gallery can play it."""
+        if not data or len(data) > 25 * 1024 * 1024:
+            return
+        self.put_object(f"{self.prefix(uid, ref_id, sha256)}/clip", data, "video/mp4")
+
     def read(self, uid, ref_id, thumbnail=False, index=0, role="gallery"):
         reference = self.repo.get(uid, ref_id)
+        if role == "clip":
+            gallery = reference.images or ([reference.image] if reference.image else [])
+            if not gallery or index < 0 or index >= len(gallery):
+                raise HTTPException(404, "Vídeo não encontrado")
+            info = gallery[index]
+            if info.preview_kind != "video":
+                raise HTTPException(404, "Vídeo não encontrado")
+            return self._download(f"{self.prefix(uid, ref_id, info.sha256)}/clip"), "video/mp4"
         if role == "author":
             info = reference.author_image
             if not info:

@@ -159,6 +159,83 @@ def process(task, jobs, ai, images, reader=read_link, media=None):
         return process_work(task, jobs, ai, images, reader, media)
 
 
+def apply_previews(uid, ref, bundle, images, ai, page, profile):
+    """Store the favicon, the site or post picture, and a playable clip when one is public."""
+    frames = []
+    if not images:
+        return ref, frames
+    all_previews = as_previews(bundle)
+    author = next((item for item in all_previews if item["kind"] == "avatar"), None)
+    previews = [] if profile else [
+        item for item in all_previews if item["kind"] in ("photo", "video")
+    ][:4]
+    infos = []
+    if author:
+        try:
+            photo = load_photo(author["url"])
+            avatar = images.attach_author(uid, ref.id, photo)
+            ref = ref.model_copy(update={"author_image": avatar})
+        except Exception:
+            logger.warning("post_author_skipped", extra={"uid": uid}, exc_info=True)
+    clip_url = None if profile else next(
+        (item.get("clip_url") for item in previews if item.get("clip_url")), None)
+    clip_bytes = None
+    clip_frame = None
+    if clip_url:
+        try:
+            clip_bytes = load_clip(clip_url)
+            clip = social_evidence(clip_bytes)
+            clip_frame = clip.frames[0][1] if clip.frames else None
+            if not page:
+                frames.extend(frame for _, frame in clip.frames)
+            if clip.audio and ai is not None and not page:
+                speech = ai.transcribe_speech(clip.audio)
+                if speech:
+                    ref = ref.model_copy(update={"transcript": speech})
+        except Exception:
+            logger.warning("post_clip_skipped", extra={"uid": uid}, exc_info=True)
+            clip_bytes = None
+            clip_frame = None
+    for preview in previews:
+        try:
+            photo = load_photo(preview["url"])
+            info = images.attach_preview(
+                uid, ref.id, photo, preview_kind=preview["kind"])
+            infos.append(info)
+            if not page or len(frames) < 2:
+                frames.append(photo)
+        except Exception:
+            if preview.get("kind") == "video" and clip_frame is not None:
+                try:
+                    info = images.attach_preview(
+                        uid, ref.id, clip_frame, preview_kind="video")
+                    infos.append(info)
+                    clip_frame = None
+                    continue
+                except Exception:
+                    clip_frame = None
+            logger.warning("post_photo_skipped", extra={"count": len(infos)}, exc_info=True)
+    if clip_frame is not None and not any(
+            getattr(info, "preview_kind", None) == "video" for info in infos):
+        try:
+            info = images.attach_preview(uid, ref.id, clip_frame, preview_kind="video")
+            infos.insert(0, info)
+        except Exception:
+            logger.warning("post_photo_skipped", extra={"count": len(infos)}, exc_info=True)
+    if infos:
+        ref = ref.model_copy(update={"image": infos[0], "images": infos})
+        video = next(
+            (info for info in infos if getattr(info, "preview_kind", None) == "video"), None)
+        if clip_bytes and video is not None and hasattr(images, "store_clip"):
+            try:
+                images.store_clip(uid, ref.id, video.sha256, clip_bytes)
+            except Exception:
+                logger.warning("post_clip_store_skipped", extra={"uid": uid}, exc_info=True)
+    if previews:
+        logger.info("post_photos_attached %s/%s", len(infos), len(previews))
+    return ref, frames
+
+
 def process_work(task, jobs, ai, images, reader=read_link, media=None):
     work = jobs.claim(task)
     if not work:
@@ -192,46 +269,9 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                     pass
             ref = ref.model_copy(update={"source": source})
             page = bool(source and source.content_kind == "page")
-            all_previews = as_previews(bundle)
-            author = next((item for item in all_previews if item["kind"] == "avatar"), None)
-            previews = [] if profile else [
-                item for item in all_previews if item["kind"] in ("photo", "video")
-            ][:4]
-            infos = []
-            if author and images:
-                try:
-                    photo = load_photo(author["url"])
-                    avatar = images.attach_author(work["uid"], ref.id, photo)
-                    ref = ref.model_copy(update={"author_image": avatar})
-                except Exception:
-                    logger.warning("post_author_skipped", extra={"uid": work["uid"]}, exc_info=True)
-            if previews and images:
-                for preview in previews:
-                    try:
-                        photo = load_photo(preview["url"])
-                        info = images.attach_preview(
-                            work["uid"], ref.id, photo, preview_kind=preview["kind"])
-                        infos.append(info)
-                        if not page:
-                            frames.append(photo)
-                    except Exception:
-                        logger.warning("post_photo_skipped", extra={"count": len(infos)},
-                                       exc_info=True)
-                logger.info("post_photos_attached %s/%s", len(infos), len(previews))
-                if infos:
-                    ref = ref.model_copy(update={"image": infos[0], "images": infos})
-            clip_url = None if profile or page else next(
-                (item.get("clip_url") for item in previews if item.get("clip_url")), None)
-            if clip_url:
-                try:
-                    clip = social_evidence(load_clip(clip_url))
-                    frames.extend(frame for _, frame in clip.frames)
-                    if clip.audio:
-                        speech = ai.transcribe_speech(clip.audio)
-                        if speech:
-                            ref = ref.model_copy(update={"transcript": speech})
-                except Exception:
-                    logger.warning("post_clip_skipped", extra={"uid": work["uid"]}, exc_info=True)
+            ref, preview_frames = apply_previews(
+                work["uid"], ref, bundle, images, ai, page, profile)
+            frames.extend(preview_frames)
             if not jobs.current(work):
                 return "stale"
         transcript = ref.transcript
@@ -249,7 +289,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 limitations=["O perfil não tem bio pública para analisar."],
             )
         else:
-            analysis = ai.interpret(ref, None if profile or page else (frames or data))
+            analysis = ai.interpret(ref, None if profile else (frames or data))
         title = library_title(ref, analysis, frames)
         if title:
             ref = ref.model_copy(update={"title": title})

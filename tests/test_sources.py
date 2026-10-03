@@ -258,6 +258,18 @@ def test_metadata_does_not_fetch_embed_html_images_or_media():
     assert result.content_kind == "metadata" and result.state == "read"
     assert "Native app demo" in result.text and "bad" not in result.text
     assert "127.0.0.1" not in result.text and result.limitations
+    posters = sources.video_posters(
+        b'{"title":"Native app demo","author_name":"Author",'
+        b'"thumbnail_url":"http://127.0.0.1/private"}',
+        sources.checked_url("https://youtu.be/M7lc1UVf-VE"),
+    )
+    assert posters == [{"url": "https://www.youtube.com/favicon.ico", "kind": "avatar"}]
+    posters = sources.video_posters(
+        b'{"title":"Native app demo","author_name":"Author",'
+        b'"thumbnail_url":"https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"}',
+        sources.checked_url("https://youtu.be/M7lc1UVf-VE"),
+    )
+    assert posters[0]["kind"] == "video" and posters[0]["url"].endswith("hqdefault.jpg")
 
 
 def test_instagram_description_is_partial_not_a_transcript():
@@ -456,6 +468,7 @@ def test_dribbble_shot_readers_prefer_official_oembed_then_html():
         "https://dribbble.com/services/oembed?url="
         "https%3A%2F%2Fdribbble.com%2Fshots%2F123-Public-Shot",
         "https://dribbble.com/shots/123-Public-Shot",
+        "https://r.jina.ai/https://dribbble.com/shots/123-Public-Shot",
     ]
 
 
@@ -519,6 +532,35 @@ def test_dribbble_html_reads_shot_description_and_bounded_public_gallery():
             "clip_url": "https://cdn.dribbble.com/clip.mp4",
         },
         {"url": "https://cdn.dribbble.com/two.png", "kind": "photo"},
+    ]
+
+
+def test_dribbble_mirror_html_reads_designer_caption_and_shot_images():
+    from queep.social.dribbble import DribbbleAdapter
+
+    adapter = DribbbleAdapter()
+    url = sources.checked_url("https://dribbble.com/shots/123-Public-Shot")
+    matched = adapter.match(url)
+    body = b"""<html><head>
+        <meta property="og:title" content="Public Shot">
+        <meta name="twitter:data1" content="@ada">
+        <meta property="og:image" content="https://cdn.dribbble.com/userupload/1/file/shot.png">
+        <meta property="og:image" content="https://cdn.dribbble.com/uploads/9/original/logo.png">
+        </head><body>
+        <header class="user-sticky-header">
+        <a class="user-sticky-header__avatar" href="/ada">
+        <img src="https://cdn.dribbble.com/users/1/avatars/normal/a.jpg">
+        </a>
+        <a class="hoverable" href="/ada">Ada Lovelace</a>
+        </header>
+        <div class="formatted-text"><p>Uma interface para equipes.</p></div>
+        </body></html>"""
+    result = adapter.parse(body, url, matched)
+    assert result.author_name == "Ada Lovelace" and result.author_handle == "ada"
+    assert result.text == "Uma interface para equipes."
+    assert adapter.media(body, url, matched) == [
+        {"url": "https://cdn.dribbble.com/users/1/avatars/normal/a.jpg", "kind": "avatar"},
+        {"url": "https://cdn.dribbble.com/userupload/1/file/shot.png", "kind": "photo"},
     ]
 
 
@@ -1340,6 +1382,126 @@ def test_fetch_returns_site_favicon_and_og_image(monkeypatch):
         {"url": "https://cursor.com/og.png", "kind": "photo"},
         {"url": "https://cursor.com/favicon.png", "kind": "avatar"},
     ]
+
+
+def test_script_shell_keeps_favicon_and_og_image(monkeypatch):
+    page = (
+        b"<html><head><title>Fontshare</title>"
+        b'<meta property="og:site_name" content="Fontshare">'
+        b'<meta property="og:description" content="Free fonts from the Indian Type Foundry.">'
+        b'<meta property="og:image" content="https://www.fontshare.com/share.jpg">'
+        b'<link rel="icon" type="image/png" href="/static/favicon.png">'
+        b"</head><body><main><p>Loading</p></main></body></html>"
+    )
+
+    async def fake_fetch_resolved_body(url):
+        return page, {"content-type": "text/html"}, url
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake_fetch_resolved_body)
+    source, previews = asyncio.run(sources.fetch("https://www.fontshare.com/"))
+    assert source.title == "Fontshare" and source.state == "read"
+    assert "Indian Type Foundry" in source.text
+    assert previews == [
+        {"url": "https://www.fontshare.com/share.jpg", "kind": "photo"},
+        {"url": "https://www.fontshare.com/static/favicon.png", "kind": "avatar"},
+    ]
+
+
+def test_svg_icon_falls_back_to_favicon_file():
+    page = (
+        b"<html><head><title>Hacker News</title>"
+        b'<link rel="icon" href="y18.svg">'
+        b"</head><body><main><p>" + b"News for hackers. " * 8 + b"</p></main></body></html>"
+    )
+    assert sources.page_previews(page, "https://news.ycombinator.com") == [
+        {"url": "https://news.ycombinator.com/favicon.ico", "kind": "avatar"},
+    ]
+
+
+def test_page_without_picture_keeps_a_public_screenshot():
+    url = sources.checked_url("https://news.ycombinator.com/")
+    bare = [{"url": "https://news.ycombinator.com/favicon.ico", "kind": "avatar"}]
+    assert sources.with_page_shot(url, bare) == [
+        *bare,
+        {"url": "https://r.jina.ai/https://news.ycombinator.com/", "kind": "photo"},
+    ]
+    pictured = [{"url": "https://cdn.linear.app/poster.jpg", "kind": "photo"}]
+    assert sources.with_page_shot(url, pictured) == pictured
+
+
+def test_page_video_keeps_poster_and_clip():
+    page = (
+        b"<html><head>"
+        b'<meta property="og:image" content="https://cdn.linear.app/poster.jpg">'
+        b'<meta property="og:video" content="https://cdn.linear.app/clip.mp4">'
+        b'<link rel="icon" type="image/png" href="/favicon.png">'
+        b"</head></html>"
+    )
+    assert sources.page_previews(page, "https://cdn.linear.app") == [
+        {"url": "https://cdn.linear.app/poster.jpg", "kind": "video",
+         "clip_url": "https://cdn.linear.app/clip.mp4"},
+        {"url": "https://cdn.linear.app/favicon.png", "kind": "avatar"},
+    ]
+
+
+def test_markdown_page_keeps_title_images_and_favicon():
+    body = (
+        b'---\ntitle: "MotionSites"\nmeta:\n  description: "Prompts for beautiful websites '
+        b'that ship with a landing page, a hero and a gallery of examples ready to paste."\n---\n'
+        b'[![MotionSites logo](https://motionsites.ai/logo.png)](/)\n'
+        b'![Plume](https://motionsites.ai/plume.jpg)\n'
+    )
+    result = sources.extract(body, {"content-type": "text/markdown"}, "https://motionsites.ai/")
+    assert result.title == "MotionSites" and "landing page" in result.text
+    assert sources.markdown_previews(body, "https://motionsites.ai/") == [
+        {"url": "https://motionsites.ai/plume.jpg", "kind": "photo"},
+        {"url": "https://motionsites.ai/favicon.ico", "kind": "avatar"},
+    ]
+
+
+def test_instagram_oembed_reads_author_caption_and_reel_poster():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/reel/DW7AKrtjQQl/")
+    match = adapter.match(url)
+    assert adapter.readers(url, match)[0].startswith("https://i.instagram.com/api/v1/oembed/")
+    body = json.dumps({
+        "provider_name": "Instagram",
+        "author_name": "nasa",
+        "author_url": "https://www.instagram.com/nasa",
+        "title": "Solar eclipse in space from the Artemis II flyby.",
+        "thumbnail_url": "https://instagram.fbsb13-1.fna.fbcdn.net/poster.jpg",
+    }).encode()
+    source = adapter.parse(body, url, match)
+    media = adapter.media(body, url, match)
+    assert source.author_handle == "nasa" and "eclipse" in source.text
+    assert media[-1]["kind"] == "video"
+    assert media[-1]["url"].endswith("poster.jpg")
+    assert "clip_url" not in media[-1]
+
+
+def test_instagram_without_media_still_points_at_the_public_poster():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/p/AbC_12/")
+    match = adapter.match(url)
+    media = adapter.media(b"<html><title>Instagram</title></html>", url, match)
+    assert media == [{
+        "url": "https://www.instagram.com/p/AbC_12/media/?size=l",
+        "kind": "photo",
+    }]
+
+
+def test_instagram_profile_html_yields_a_public_avatar():
+    from queep.social.instagram import profile_pic_from_html
+
+    body = (
+        b'profile_pic_url":"https:\\/\\/scontent.cdninstagram.com\\/pic.jpg?a=1\\u0026b=2"'
+    )
+    assert profile_pic_from_html(body) == "https://scontent.cdninstagram.com/pic.jpg?a=1&b=2"
+    assert profile_pic_from_html(b'profile_picture":null') is None
 
 
 def test_public_image_never_fetches_private_hosts(monkeypatch):

@@ -150,13 +150,21 @@ def _identity_from_html(soup, match, og_title, page):
                 handle = _profile_from_url(author.get("url"), page)
         if name and handle:
             break
-    for link in soup.select("a[rel~='author'], .shot-user a, .user-information a")[:12]:
+    for link in soup.select(
+        "a[rel~='author'], .shot-user a, .user-information a, .user-sticky-header a"
+    )[:12]:
         candidate = _profile_from_url(link.get("href"), page)
         if not candidate:
             continue
         handle = handle or candidate
-        name = name or link.get_text(" ", strip=True)
-        break
+        label = link.get_text(" ", strip=True)
+        if label and not name:
+            name = label
+        if name and handle:
+            break
+    data_handle = _meta(soup, "twitter:data1").lstrip("@").strip()
+    if not handle and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,31}", data_handle):
+        handle = data_handle
     matched = re.search(r"\s+by\s+(.+?)(?:\s+on\s+Dribbble)?$", og_title, re.I)
     if matched and not name:
         name = matched.group(1).strip()
@@ -175,10 +183,13 @@ def _caption_from_html(soup, og_title):
         "[data-shot-description]",
         ".shot-description",
         ".shot-desc",
+        ".formatted-text",
     ):
         node = soup.select_one(selector)
         if node:
-            text = _plain_text(str(node))
+            text = re.sub(
+                r"^(?:Description|Descrição)\s+", "", _plain_text(str(node))
+            ).strip()
             if text:
                 return text
     description = _plain_text(
@@ -213,7 +224,9 @@ def _avatar_from_html(soup, page, match):
             if isinstance(image, dict):
                 image = image.get("url") or image.get("contentUrl")
             candidates.append(image)
-    for node in soup.select("img.avatar, .avatar img, [data-avatar] img")[:8]:
+    for node in soup.select(
+        "img.avatar, .avatar img, [data-avatar] img, .user-sticky-header img"
+    )[:8]:
         candidates.append(node.get("src") or node.get("data-src"))
     if match.role == "profile":
         candidates.extend(_meta_values(soup, "og:image", "twitter:image", "twitter:image:src"))
@@ -336,6 +349,11 @@ def _media_from_html(soup, page, match):
         media_count += 1
         if media_count >= 4:
             break
+    if any("userupload" in item["url"] and item["kind"] != "avatar" for item in previews):
+        previews = [
+            item for item in previews
+            if item["kind"] == "avatar" or "userupload" in item["url"]
+        ]
     return previews[:5]
 
 
@@ -353,14 +371,17 @@ class DribbbleAdapter:
 
     def readers(self, url, match):
         if match.role == "profile":
-            return [f"https://dribbble.com/{match.key}"]
+            canonical = f"https://dribbble.com/{match.key}"
+            return [canonical, f"https://r.jina.ai/{canonical}"]
         segment = next(
             (part for part in url.path.split("/") if part and part.lower() != "shots"),
             match.key,
         )
         canonical = f"https://dribbble.com/shots/{segment}"
         oembed = "https://dribbble.com/services/oembed?" + urlencode({"url": canonical})
-        return [oembed, canonical]
+        # Dribbble answers the official page with a bot challenge. The public
+        # reader is the copy that still carries the shot image and caption.
+        return [oembed, canonical, f"https://r.jina.ai/{canonical}"]
 
     def media(self, body, url, match):
         value = _json(body)

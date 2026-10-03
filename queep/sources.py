@@ -141,6 +141,16 @@ async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
         "Accept": accept,
         "Accept-Encoding": "gzip, identity",
     }
+    # r.jina.ai is a public reader for hosts that answer with a bot challenge,
+    # and for a page screenshot when the site publishes no picture.
+    mirror = url.host == "r.jina.ai"
+    if mirror:
+        headers["X-Return-Format"] = "screenshot" if allowed == IMAGE_TYPES else "html"
+    timeout = (
+        {"connect": 8, "read": 12, "write": 5, "pool": 5}
+        if mirror
+        else {"connect": 5, "read": 5, "write": 5, "pool": 5}
+    )
     # HTTP core has no environment proxy/cookie jar. A fresh pool per hop prevents
     # sharing a connection across virtual hosts. TLS still verifies the original host.
     async with httpcore.AsyncConnectionPool(retries=0) as pool:
@@ -148,10 +158,7 @@ async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
             "GET",
             str(pinned),
             headers=headers,
-            extensions={
-                "sni_hostname": url.raw_host.decode(),
-                "timeout": {"connect": 5, "read": 5, "write": 5, "pool": 5},
-            },
+            extensions={"sni_hostname": url.raw_host.decode(), "timeout": timeout},
         ) as response:
             metadata = {
                 key.decode().lower(): value.decode("latin-1") for key, value in response.headers
@@ -197,7 +204,12 @@ def extract(body, metadata, url):
     if kind == "application/json":
         raise SourceError("format")
     if kind in ("text/plain", "text/markdown"):
-        text = body.decode("utf-8", errors="replace").strip()
+        meta, text = split_frontmatter(body.decode("utf-8", errors="replace"))
+        text = text.strip()
+        title = (meta.get("og:title") or meta.get("title") or "").strip()
+        description = (meta.get("og:description") or meta.get("description") or "").strip()
+        if description and description not in text:
+            text = f"{description}\n{text}".strip()
     else:
         soup = BeautifulSoup(body, "html.parser")
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
@@ -277,22 +289,68 @@ def public_asset_url(raw, page):
     return str(url)
 
 
+def _svg_asset(raw):
+    if not isinstance(raw, str):
+        return False
+    return raw.split("?", 1)[0].lower().endswith(".svg")
+
+
+def _mp4_asset(raw, page):
+    address = public_asset_url(raw, page)
+    if not address:
+        return None
+    path = address.split("?", 1)[0].lower()
+    if path.endswith((".mp4", ".m4v")):
+        return address
+    return None
+
+
+def split_frontmatter(text):
+    """Title and description from a leading --- block. Nested keys stay one line each."""
+    if not text.startswith("---"):
+        return {}, text
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}, text
+    meta = {}
+    for line in text[3:end].splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        meta[key.strip().strip('"').strip("'")] = value.strip().strip('"').strip("'")
+    return meta, text[end + 4 :]
+
+
 def page_previews(body, page):
-    """Favicon and og:image for website cards; never page chrome or private hosts."""
+    """Favicon, og:image and a public mp4 poster. Never page chrome or private hosts."""
     try:
         soup = BeautifulSoup(body, "html.parser")
     except (TypeError, ValueError):
         return []
     previews, seen = [], set()
 
-    def add(raw, kind):
+    def add(raw, kind, clip=None):
         address = public_asset_url(raw, page)
-        if not address or address in seen or kind not in ("photo", "avatar"):
+        if not address or address in seen or kind not in ("photo", "video", "avatar"):
+            return
+        if _svg_asset(address):
             return
         seen.add(address)
-        previews.append({"url": address, "kind": kind})
+        item = {"url": address, "kind": kind}
+        if kind == "video" and clip:
+            item["clip_url"] = clip
+        previews.append(item)
 
-    add(meta_content(soup, "og:image", "twitter:image", "twitter:image:src"), "photo")
+    image = meta_content(soup, "og:image", "twitter:image", "twitter:image:src")
+    video = None
+    for name in ("og:video", "og:video:secure_url", "og:video:url"):
+        video = _mp4_asset(meta_content(soup, name), page)
+        if video:
+            break
+    if video and image:
+        add(image, "video", clip=video)
+    else:
+        add(image, "photo")
     icons = []
     for tag in soup.find_all("link"):
         rels = tag.get("rel") or []
@@ -301,7 +359,7 @@ def page_previews(body, page):
         names = {str(part).lower() for part in rels}
         href = tag.get("href")
         mime = (tag.get("type") or "").lower()
-        if "svg" in mime:
+        if "svg" in mime or _svg_asset(href):
             continue
         if "apple-touch-icon" in names:
             icons.append((0, href))
@@ -312,9 +370,99 @@ def page_previews(body, page):
     icons.sort(key=lambda item: item[0])
     if icons:
         add(icons[0][1], "avatar")
-    else:
+    if not any(item["kind"] == "avatar" for item in previews):
         add("/favicon.ico", "avatar")
     return previews
+
+
+def markdown_previews(body, page):
+    """Images and favicon from a markdown page whose HTML shell never arrives."""
+    meta, text = split_frontmatter(body.decode("utf-8", errors="replace"))
+    previews, seen = [], set()
+
+    def add(raw, kind):
+        address = public_asset_url(raw, page)
+        if not address or address in seen or _svg_asset(address):
+            return
+        seen.add(address)
+        previews.append({"url": address, "kind": kind})
+
+    add(meta.get("og:image") or meta.get("twitter:image"), "photo")
+    photos, logo = [], None
+    for alt, raw in re.findall(r"!\[([^\]]*)\]\(([^)\s]+)\)", text):
+        if "logo" in alt.lower() or "logo" in raw.lower():
+            logo = logo or raw
+            continue
+        photos.append(raw)
+    for raw in photos[:4]:
+        add(raw, "photo")
+    if not any(item["kind"] == "photo" for item in previews) and logo:
+        add(logo, "photo")
+    add("/favicon.ico", "avatar")
+    return previews
+
+
+_BLOCKED_TITLE = re.compile(
+    r"just a moment|access denied|sign in|log in|attention required|"
+    r"verify you are human|iniciar sess[aã]o",
+    re.I,
+)
+
+
+def with_page_shot(url, previews):
+    """A public screenshot when the page itself published no picture."""
+    items = list(previews or [])
+    if any(item.get("kind") in ("photo", "video") for item in items):
+        return items
+    if getattr(url, "host", "") == "r.jina.ai":
+        return items
+    items.append({"url": f"https://r.jina.ai/{url}", "kind": "photo"})
+    return items
+
+
+def asset_previews(body, headers, page):
+    kind = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if kind in ("text/markdown", "text/plain") or body.lstrip().startswith(b"---"):
+        return markdown_previews(body, page)
+    return page_previews(body, page)
+
+
+def shell_source(body, headers, url, previews):
+    """Title, description and previews when the visible text is only a script shell."""
+    kind = headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    title, text = "", ""
+    if kind in ("text/markdown", "text/plain") or body.lstrip().startswith(b"---"):
+        meta, _ = split_frontmatter(body.decode("utf-8", errors="replace"))
+        title = (meta.get("og:title") or meta.get("title") or "").strip()
+        text = (meta.get("og:description") or meta.get("description") or "").strip()
+    else:
+        try:
+            soup = BeautifulSoup(body, "html.parser")
+        except (TypeError, ValueError):
+            soup = None
+        if soup is not None:
+            raw_title = meta_content(soup, "og:title") or (
+                soup.title.get_text(" ", strip=True) if soup.title else ""
+            )
+            title = page_product_name(soup, raw_title) or raw_title
+            text = meta_content(soup, "og:description", "description")
+    if _BLOCKED_TITLE.search(title or ""):
+        return None
+    if not title and not text and not previews:
+        return None
+    return SourceContent(
+        content_kind="page",
+        state="read",
+        url=str(url),
+        title=title[:200],
+        text=clip(text),
+        fetched_at=datetime.now(UTC),
+        native_title=False,
+        limitations=[
+            "Foi lida a prévia pública (título, ícone e imagem). "
+            "O texto da página pode exigir JavaScript."
+        ],
+    )
 
 
 TWEET_HOSTS = {
@@ -445,13 +593,37 @@ def video_metadata(body, original):
             text=f"Título: {title[:1000]}\nAutor: {author[:200]}",
             fetched_at=datetime.now(UTC),
             limitations=[
-                "Somente título e autor públicos foram lidos. A fala e as cenas do vídeo "
+                "Somente título, autor e a capa pública foram lidos. A fala e as cenas do vídeo "
                 "não foram analisadas. Envie o arquivo para analisar o conteúdo."
             ],
             native_title=True,
         )
     except (ValueError, TypeError, AttributeError) as error:
         raise SourceError("empty") from error
+
+
+def video_posters(body, page):
+    """Public oEmbed poster and site icon. Private or relative junk is dropped."""
+    try:
+        value = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError):
+        return []
+    if not isinstance(value, dict):
+        return []
+    previews = []
+    thumb = public_asset_url(value.get("thumbnail_url"), page)
+    if thumb and not _svg_asset(thumb):
+        previews.append({"url": thumb, "kind": "video"})
+    host = (page.host or "").lower()
+    icon = None
+    if host in ("youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com"):
+        icon = "https://www.youtube.com/favicon.ico"
+    elif host in ("vimeo.com", "www.vimeo.com"):
+        icon = "https://vimeo.com/favicon.ico"
+    icon_url = public_asset_url(icon, page) if icon else None
+    if icon_url:
+        previews.append({"url": icon_url, "kind": "avatar"})
+    return previews
 
 
 def clean_tweet_text(text):
@@ -918,12 +1090,21 @@ async def fetch(raw):
     endpoint = social_endpoint(original)
     if endpoint:
         body, _, _ = await fetch_resolved_body(checked_url(endpoint))
-        return video_metadata(body, original), None
+        return video_metadata(body, original), video_posters(body, original)
     body, headers, final = await fetch_resolved_body(original)
-    source = extract(body, headers, final)
+    previews = asset_previews(body, headers, final)
+    try:
+        source = extract(body, headers, final)
+    except SourceError as error:
+        if str(error) != "empty":
+            raise
+        source = shell_source(body, headers, final, previews)
+        if source is None:
+            raise
     if source.content_kind != "page":
         return source, None
-    return source, page_previews(body, final) or None
+    previews = with_page_shot(final, previews)
+    return source, previews or None
 
 
 async def fetch_network(adapter, original, match):
@@ -939,9 +1120,20 @@ async def fetch_network(adapter, original, match):
         if media:
             previews = media
         try:
-            return adapter.parse(body, original, match), previews
+            parsed = adapter.parse(body, original, match)
         except SourceError as error:
             last = error
+            continue
+        if (
+            getattr(adapter, "name", "") == "instagram"
+            and not any(item.get("kind") == "avatar" for item in previews)
+        ):
+            from queep.social.instagram import profile_avatar_url
+
+            avatar = await profile_avatar_url(parsed.author_handle)
+            if avatar:
+                previews = [{"url": avatar, "kind": "avatar"}, *previews]
+        return parsed, previews
     fallback = adapter.fallback(original, match, previews)
     if fallback is not None:
         return fallback, previews

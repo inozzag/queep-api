@@ -347,7 +347,7 @@ def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False):
 }}})
 def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False,
                index: Annotated[int, Query(ge=0, le=3)] = 0,
-               role: Annotated[Literal["gallery", "author"], Query()] = "gallery"):
+               role: Annotated[Literal["gallery", "author", "clip"], Query()] = "gallery"):
     data, content_type = media.read(uid, str(ref_id), thumbnail, index, role)
     return Response(content=data, media_type=content_type,
                     headers={"Content-Disposition": "inline"})

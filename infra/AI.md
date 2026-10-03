@@ -39,11 +39,13 @@ conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite 
 Imagens são reduzidas a 1536 px para interpretação. Fotos e pôsteres de vídeo
 anexados a um post social seguem o mesmo caminho, mesmo quando o texto do post
 não pôde ser lido: entram na interpretação, no documento vetorial e na conferência
-da busca. O arquivo de vídeo do post no X não é baixado. Notas
-longas recebem análise parcial; o documento vetorial usa até 3.500 bytes de texto
-e a análise. A conferência usa trechos de até 600 bytes por nota. Links públicos
-recebem extração de texto, com cobertura parcial e limites descritos em
-[SOURCES.md](SOURCES.md).
+da busca. O arquivo de vídeo do post no X não é baixado. O documento vetorial
+começa com o que o item é e para que serve (`portrait`), seguido de uso, assuntos,
+nomes, aparência e um trecho curto do texto ou da fala. Notas longas recebem
+análise parcial. A conferência usa esse retrato junto com trechos de até 600 bytes
+por nota. Links públicos recebem extração de texto, com cobertura parcial e limites
+descritos em [SOURCES.md](SOURCES.md). A capa de um site entra na interpretação
+para a busca por hero, branding e composição.
 Áudio/vídeo de até cinco minutos usam transcrição e amostragem visual; limites em
 [MEDIA.md](MEDIA.md). Busca exaustiva, filtro textual complementar e localização de
 trechos longos permanecem fora desta entrega.

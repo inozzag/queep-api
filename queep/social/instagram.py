@@ -3,6 +3,7 @@
 import json
 import re
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from queep.models import SourceContent
 from queep.social.types import SocialMatch
@@ -70,6 +71,38 @@ def profile_handle(url):
     return handle
 
 
+def profile_pic_from_html(body):
+    """Public profile photo embedded in the profile page, when oEmbed has none."""
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else body
+    match = re.search(r'profile_pic_url":"((?:\\.|[^"\\])*)"', text)
+    if not match:
+        return None
+    try:
+        url = json.loads('"' + match.group(1) + '"')
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return None
+    return url
+
+
+async def profile_avatar_url(handle):
+    if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z0-9._]{1,30}", handle):
+        return None
+    if handle.lower() in RESERVED:
+        return None
+    from queep.sources import SourceError, checked_url, fetch_resolved_body, public_asset_url
+
+    try:
+        body, _, final = await fetch_resolved_body(
+            checked_url(f"https://www.instagram.com/{handle}/")
+        )
+    except SourceError:
+        return None
+    raw = profile_pic_from_html(body)
+    return public_asset_url(raw, final) if raw else None
+
+
 class InstagramAdapter:
     name = "instagram"
 
@@ -86,7 +119,15 @@ class InstagramAdapter:
         if match.role == "profile":
             return [f"https://www.instagram.com/{match.key}/"]
         code = match.key
+        path = str(url).lower()
+        if "/reel/" in path or "/reels/" in path:
+            canonical = f"https://www.instagram.com/reel/{code}/"
+        elif "/tv/" in path:
+            canonical = f"https://www.instagram.com/tv/{code}/"
+        else:
+            canonical = f"https://www.instagram.com/p/{code}/"
         return [
+            "https://i.instagram.com/api/v1/oembed/?url=" + quote(canonical, safe=""),
             f"https://www.instagram.com/p/{code}/embed/captioned/",
             f"https://www.instagram.com/reel/{code}/embed/captioned/",
             str(url),
@@ -107,6 +148,13 @@ class InstagramAdapter:
                     item.pop("clip_url", None)
                 used_clip = True
             items.append(item)
+        if not any(item.get("kind") in ("photo", "video") for item in items):
+            path = str(url).lower()
+            video = "/reel/" in path or "/reels/" in path or "/tv/" in path
+            items.append({
+                "url": f"https://www.instagram.com/p/{match.key}/media/?size=l",
+                "kind": "video" if video else "photo",
+            })
         return items
 
     def parse(self, body, url, match):
@@ -245,6 +293,10 @@ def _payload(body, page):
 
 
 def _from_json(value, page):
+    if value.get("provider_name") == "Instagram" and (
+        value.get("thumbnail_url") or value.get("title") or value.get("author_name")
+    ):
+        return _from_oembed(value, page)
     node = _media_node(value)
     if node:
         return _from_graphql(node, page)
@@ -295,6 +347,26 @@ def _from_graphql(node, page):
         "handle": handle.lstrip("@"),
         "caption": caption,
         "avatar": avatar,
+        "slides": slides,
+    }
+
+
+def _from_oembed(value, page):
+    author_url = value.get("author_url") if isinstance(value.get("author_url"), str) else ""
+    handle = author_url.rstrip("/").rsplit("/", 1)[-1] if author_url else ""
+    author = value.get("author_name") if isinstance(value.get("author_name"), str) else ""
+    caption = value.get("title") if isinstance(value.get("title"), str) else ""
+    thumb = _media_url(value.get("thumbnail_url"), page)
+    page_text = str(page).lower()
+    video = "/reel/" in page_text or "/reels/" in page_text or "/tv/" in page_text
+    slides = []
+    if thumb:
+        slides.append(_video_slide(thumb, None) if video else {"url": thumb, "kind": "photo"})
+    return {
+        "author": (author or handle).strip(),
+        "handle": handle.lstrip("@"),
+        "caption": caption,
+        "avatar": None,
         "slides": slides,
     }
 
