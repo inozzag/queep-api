@@ -4,7 +4,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
 
-from queep.ai import SPACE
+from queep.ai import SPACE, AIError
 from queep.cost_context import attribution
 from queep.models import Reference, SearchResults
 from queep.usage import policy
@@ -37,18 +37,28 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     records = [document.to_dict() for document in ready.stream()]
     if not any(record.get("archived_at") is None for record in records):
         return SearchResults(items=[], has_pending=has_pending)
-    ai.budget.rate_limit(uid)
-    vector = ai.embed(query, query=True)
-    neighbors = nearest_active(records, vector)
-    # Resolve current revisions both before sending to the model and before returning.
-    candidates = current_references(
-        repo, uid, [Reference.model_validate(item) for item in neighbors], space_id
-    )[:CANDIDATE_LIMIT]
-    selected = ai.verify(query, candidates)
-    by_id = {ref.id: ref for ref in candidates}
-    visible = current_references(
-        repo, uid, [by_id[identifier] for identifier in selected], space_id)
-    return SearchResults(items=visible, has_pending=has_pending)
+    token = ai.budget.rate_limit(uid)
+    try:
+        vector = ai.embed(query, query=True)
+        neighbors = nearest_active(records, vector)
+        # Resolve current revisions both before sending to the model and before returning.
+        candidates = current_references(
+            repo, uid, [Reference.model_validate(item) for item in neighbors], space_id
+        )[:CANDIDATE_LIMIT]
+        selected = ai.verify(query, candidates)
+        by_id = {ref.id: ref for ref in candidates}
+        visible = current_references(
+            repo, uid, [by_id[identifier] for identifier in selected], space_id)
+        result = SearchResults(items=visible, has_pending=has_pending)
+    except AIError:
+        release = getattr(ai.budget, "release_search", None)
+        if release is not None:
+            release(uid, token)
+        raise
+    commit = getattr(ai.budget, "commit_search", None)
+    if commit is not None and token:
+        commit(uid, token)
+    return result
 
 
 def nearest_active(records, vector, limit=NEIGHBOR_LIMIT):
