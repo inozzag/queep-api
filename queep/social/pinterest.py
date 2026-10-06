@@ -78,6 +78,10 @@ def profile_handle(url):
 class PinterestAdapter:
     name = "pinterest"
 
+    def owns(self, url):
+        host = (url.host or "").lower().rstrip(".")
+        return pinterest_host(url) or host in SHORT_HOSTS
+
     def match(self, url):
         pin = pin_id(url)
         if pin:

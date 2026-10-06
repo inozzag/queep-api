@@ -21,7 +21,7 @@ from queep.images import Images, as_stored_image
 from queep.jobs import Jobs
 from queep.media import MediaFiles, evidence, social_evidence
 from queep.models import Interpretation
-from queep.social import is_profile
+from queep.social import is_profile, owner
 from queep.sources import (
     PHOTO_HOSTS,
     VIDEO_HOSTS,
@@ -148,12 +148,11 @@ def process(task, jobs, ai, images, reader=read_link, media=None):
     kind = ("media" if reference.get("kind") in ("audio", "video")
             else reference.get("kind", "unknown"))
     if kind == "link" and reference.get("url"):
-        from urllib.parse import urlsplit
-        host = (urlsplit(reference["url"]).hostname or "").lower()
-        if any(host == h or host.endswith("." + h) for h in (
-            "instagram.com", "x.com", "twitter.com", "pinterest.com",
-            "behance.net", "dribbble.com")):
-            kind = "social"
+        try:
+            if owner(checked_url(reference["url"])):
+                kind = "social"
+        except SourceError:
+            pass
     with attribution(plan=plan, kind=kind, operation_id=record.get("run_id", task["run_id"]),
                      media_seconds=(reference.get("media") or {}).get("duration_seconds", 0)):
         return process_work(task, jobs, ai, images, reader, media)

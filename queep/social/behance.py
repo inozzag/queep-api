@@ -60,9 +60,14 @@ SIZE_RANK = {
     "1400": 4,
     "max_1200": 5,
     "max_808": 6,
+    "max_808_webp": 6,
     "disp": 7,
     "1400_webp": 8,
     "max_1200_webp": 9,
+    "404_webp": 10,
+    "230_webp": 11,
+    "202_webp": 12,
+    "115_webp": 13,
 }
 
 
@@ -101,6 +106,9 @@ def profile_handle(url):
 class BehanceAdapter:
     name = "behance"
 
+    def owns(self, url):
+        return behance_host(url)
+
     def match(self, url):
         gallery = project_id(url)
         if gallery:
@@ -114,7 +122,8 @@ class BehanceAdapter:
         if match.role == "profile":
             return [str(url)]
         oembed = "https://www.behance.net/services/oembed?" + urlencode({"url": str(url)})
-        return [oembed, str(url)]
+        embed = f"https://www.behance.net/embed/project/{match.key}"
+        return [oembed, embed, str(url)]
 
     def media(self, body, url, match):
         payload = _payload(body, url, match)
@@ -176,6 +185,13 @@ class BehanceAdapter:
             fetched_at=datetime.now(UTC),
             limitations=[_post_limitation(slides, text)],
         )
+
+    def attach_gallery(self, source, media):
+        """oEmbed text plus a cover found by a later reader."""
+        slides = [item for item in media if item.get("kind") != "avatar"]
+        if not slides or source.content_kind != "metadata":
+            return source
+        return source.model_copy(update={"limitations": [_post_limitation(slides, source.text)]})
 
     def fallback(self, url, match, previews):
         visible = [item for item in previews if item.get("kind") != "avatar"]
@@ -368,8 +384,14 @@ def _from_html(soup, page, match):
                 handle = candidate
                 break
     if not name:
+        name = _profile_alt_name(soup)
+    if not name:
         name = _name_from_title(og_title, match.role)
     caption = _plain_text(_meta(soup, "og:description", "twitter:description", "description"))
+    if match.role == "post" and not caption:
+        project = _project_title(og_title)
+        if project and project != name:
+            caption = project
     if match.role == "post" and name and caption.endswith(" - " + name):
         caption = caption[: -len(" - " + name)].strip()
     avatar = _avatar_from_html(soup, page, match)
@@ -397,11 +419,11 @@ def _from_html(soup, page, match):
     elif cover:
         _add_slide(slides, seen, ranks, cover, "photo", None)
     for node in soup.find_all("img"):
-        raw = node.get("src") or node.get("data-src")
-        address = _media_url(raw, page)
-        if not address or not _is_module(address):
-            continue
-        _add_slide(slides, seen, ranks, address, "photo", None)
+        for raw in _img_candidates(node):
+            address = _media_url(raw, page)
+            if not address or not (_is_module(address) or _is_project_cover(address)):
+                continue
+            _add_slide(slides, seen, ranks, address, "photo", None)
         if len(slides) >= 4:
             break
     return {
@@ -524,6 +546,45 @@ def _avatar_from_html(soup, page, match):
 def _is_module(url):
     path = url.split("?", 1)[0].lower()
     return "/project_modules/" in path
+
+
+def _is_project_cover(url):
+    path = url.split("?", 1)[0].lower()
+    return "/projects/" in path and path.endswith((".png", ".jpg", ".jpeg", ".webp"))
+
+
+def _img_candidates(node):
+    found = []
+    for raw in (node.get("src"), node.get("data-src")):
+        if isinstance(raw, str) and raw.strip():
+            found.append(raw.strip())
+    srcset = node.get("srcset")
+    if isinstance(srcset, str):
+        for part in srcset.split(","):
+            bits = part.strip().split()
+            if bits:
+                found.append(bits[0])
+    return found
+
+
+def _profile_alt_name(soup):
+    for node in soup.find_all("img"):
+        alt = node.get("alt") if isinstance(node.get("alt"), str) else ""
+        found = re.fullmatch(r"(.+?)['\u2019]s profile", alt.strip(), re.I)
+        if found and found.group(1).strip():
+            return found.group(1).strip()
+    return ""
+
+
+def _project_title(title):
+    value = title or ""
+    for marker in (" :: Behance", " | Behance", " - Behance", " on Behance"):
+        if marker in value:
+            value = value.split(marker, 1)[0]
+    value = value.strip()
+    if " - " in value:
+        value = value.split(" - ", 1)[0].strip()
+    return value
 
 
 def _name_from_title(title, role):

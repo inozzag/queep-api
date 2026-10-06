@@ -23,6 +23,14 @@ def resolve(url):
     return None, None
 
 
+def owner(url):
+    """The network that owns this host, even when the path is not a post or profile."""
+    for adapter in ADAPTERS:
+        if adapter.owns(url):
+            return adapter
+    return None
+
+
 def is_profile(url):
     _, matched = resolve(url)
     return bool(matched and matched.role == "profile")
