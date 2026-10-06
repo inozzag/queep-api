@@ -1,16 +1,19 @@
 """Contract tests for the three natural-language search blockers."""
 
+import json
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from google.cloud.firestore_v1.vector import Vector
 
 from queep.ai import SPACE
 from queep.config import database
-from queep.models import Interpretation
+from queep.models import Interpretation, Reference
 from queep.repository import Repository
 from queep.search import NEIGHBOR_LIMIT, search
+from tests.test_ai_processing import fake_client
 
 ANALYSIS = Interpretation(summary="Interface de CRM branca", coverage="full")
 QUERY = [1.0] + [0.0] * 767
@@ -57,3 +60,38 @@ def test_archived_rows_do_not_consume_neighbor_slots():
     assert seen == ["live-note", "live-link"]
     assert [item.id for item in result.items] == ["live-note", "live-link"]
     assert not any(item.id.startswith("archived-") for item in result.items)
+
+
+def reference(identifier, kind, url=None):
+    now = datetime.now(UTC)
+    return Reference(id=identifier, kind=kind, title="", text="cena azul", url=url,
+                     status="ready", revision=1, created_at=now, updated_at=now)
+
+
+LINKS = (
+    reference("youtube", "link", "https://www.youtube.com/watch?v=M7lc1UVf-VE"),
+    reference("page", "link", "https://example.com/artigo"),
+    reference("post", "link", "https://x.com/ada/status/1"),
+)
+LIBRARY = (
+    *LINKS,
+    reference("video", "video"),
+    reference("image", "image"),
+    reference("audio", "audio"),
+    reference("note", "note"),
+)
+SELECTED = [item.id for item in LIBRARY]
+
+
+@pytest.mark.parametrize("requested,expected", [
+    ("video", ["youtube", "page", "post", "video"]),
+    ("image", ["youtube", "page", "post", "image"]),
+    ("audio", ["audio"]),
+    ("note", ["note"]),
+    ("link", ["youtube", "page", "post"]),
+    ("any", SELECTED),
+])
+def test_visual_and_video_queries_keep_posts_pages_and_youtube(requested, expected):
+    ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": requested, "ids": SELECTED})}}]})
+    assert ai.verify("mostre o material", LIBRARY) == expected

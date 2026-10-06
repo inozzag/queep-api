@@ -66,13 +66,22 @@ visuais efetivamente mostradas precisam de evidência em media_appearance ou no 
 das cenas amostradas. Uma descrição falada de uma interface não prova que ela aparece.
 Preencha requested_kind somente se a consulta exige um formato de referência: note,
 link, image, audio ou video; caso contrário, any. "Vídeos sobre X" exige video.
-"Ferramentas para criar vídeos" pede ferramentas, não um formato: use any.
+Posts, páginas e YouTube são kind=link e também atendem consultas visuais ou de
+vídeo: inclua esses links na seleção mesmo sem serem arquivos. "Ferramentas para
+criar vídeos" pede ferramentas, não um formato: use any.
 O assunto principal pode estar na fala de um áudio/vídeo. Respeite kind: áudio não
 é vídeo e não contém cenas. Não elimine referências distintas só por tratarem do mesmo assunto.
 Retorne IDs em ordem de relevância, somente quando há evidência de correspondência.
 Se nenhum corresponde, retorne lista vazia. Não invente IDs, itens ou fatos.
 Não faça uma recomendação de fora do acervo e não afirme ter encontrado tudo que existe.
 """
+
+
+def matches_requested_kind(requested, reference):
+    """Posts, pages and YouTube are links. Free and Pro cannot upload AV files."""
+    if requested == "any" or reference.kind == requested:
+        return True
+    return requested in ("image", "video") and reference.kind == "link"
 
 
 class AIError(Exception):
@@ -458,7 +467,7 @@ coverage deve ser partial. Resumo de até duas frases; limitações somente conc
                 raise ValueError("ids")
             by_id = {ref.id: ref for ref in references}
             return [identifier for identifier in selected
-                    if kind == "any" or by_id[identifier].kind == kind]
+                    if matches_requested_kind(kind, by_id[identifier])]
         except (KeyError, TypeError, ValueError) as exc:
             raise AIError("invalid_selection") from exc
 
