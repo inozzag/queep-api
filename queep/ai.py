@@ -18,6 +18,8 @@ from queep.sources import evidence
 logger = logging.getLogger(__name__)
 SPACE = "gemini-embedding-2:768:document-v1"
 ANALYSIS_VERSION = "queep-interpretation-v6-post-photos"
+# One paid vision call. Clip samples must fit here; they are not a fifth image.
+VISION_FRAME_LIMIT = 4
 INTERPRETER = {"id": "google/gemini-2.5-flash-lite", "provider": "google-vertex",
                "prompt": .1, "completion": .4, "reasoning": {"enabled": False}}
 VERIFIER = {"id": "google/gemini-3.1-flash-lite", "provider": "google-vertex/global",
@@ -88,6 +90,15 @@ class Transcription(BaseModel):
     transcript: str = Field(max_length=18000, description=(
         "Transcrição literal de toda a fala audível, no idioma original. "
         "Vazio somente quando não há fala identificável; nunca substituir por resumo."))
+
+
+def select_vision_frames(posters, clips, limit=VISION_FRAME_LIMIT):
+    """Keep clip samples inside the vision budget when posters would fill it."""
+    posters = [frame for frame in (posters or []) if frame]
+    clips = [frame for frame in (clips or []) if frame]
+    if len(clips) >= limit:
+        return clips[:limit]
+    return [*posters[: limit - len(clips)], *clips]
 
 
 def clip(text, byte_limit):
@@ -282,7 +293,7 @@ class AI:
             raw[key] = raw[key][:max(0, len(raw[key]) // 2)]
             raw["source_coverage"] = "partial"
         content = [{"type": "text", "text": json.dumps(raw, ensure_ascii=False)}]
-        for frame in frames[:4]:
+        for frame in frames[:VISION_FRAME_LIMIT]:
             encoded = encode_vision_frame(frame)
             if not encoded:
                 continue

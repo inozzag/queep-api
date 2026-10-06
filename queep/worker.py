@@ -12,7 +12,15 @@ from google.auth.transport.requests import Request
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from queep.ai import AI, AIError, document, generated_title, headline_title, without_product_prefix
+from queep.ai import (
+    AI,
+    AIError,
+    document,
+    generated_title,
+    headline_title,
+    select_vision_frames,
+    without_product_prefix,
+)
 from queep.budget import Budget
 from queep.config import Settings, database, firebase_app, image_bucket
 from queep.cost_context import attribution
@@ -170,7 +178,8 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
         data = images.read(work["uid"], ref.id)[0] if images and ref.kind == "image" else None
         if not jobs.current(work):
             return "stale"
-        frames = []
+        poster_frames = []
+        clip_frames = []
         profile = False
         page = False
         if ref.kind == "link":
@@ -240,7 +249,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                                 work["uid"], ref.id, photo, preview_kind=kind)
                         infos.append(info)
                         if not page:
-                            frames.append(photo)
+                            poster_frames.append(photo)
                     except Exception:
                         logger.warning("post_photo_skipped", extra={"count": len(infos)},
                                        exc_info=True)
@@ -250,7 +259,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
             if evidence_clip and not page:
                 try:
                     clip = social_evidence(evidence_clip)
-                    frames.extend(frame for _, frame in clip.frames)
+                    clip_frames.extend(frame for _, frame in clip.frames)
                     if clip.audio:
                         speech = ai.transcribe_speech(clip.audio)
                         if speech:
@@ -260,6 +269,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
             if not jobs.current(work):
                 return "stale"
         transcript = ref.transcript
+        vision = []
         if ref.media:
             files = media or MediaFiles(images.db, images.bucket)
             content = evidence(files.read(work["uid"], ref.id)[0], ref.media)
@@ -274,8 +284,9 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 limitations=["O perfil não tem bio pública para analisar."],
             )
         else:
-            analysis = ai.interpret(ref, None if profile or page else (frames or data))
-        title = library_title(ref, analysis, frames)
+            vision = [] if profile or page else select_vision_frames(poster_frames, clip_frames)
+            analysis = ai.interpret(ref, vision or data)
+        title = library_title(ref, analysis, vision)
         if title:
             ref = ref.model_copy(update={"title": title})
         if not jobs.current(work):

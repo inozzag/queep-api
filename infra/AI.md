@@ -36,7 +36,9 @@ São controles conservadores, não um teto de faturamento Firebase. Há também 
 de 100 buscas/conta/dia e intervalo mínimo de 1 s. Registros de custo não incluem
 conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite próprio.
 
-Imagens são reduzidas a 1536 px para interpretação. Fotos e pôsteres de vídeo
+Imagens são reduzidas a 1536 px para interpretação. Até quatro imagens seguem juntas
+para o modelo; amostras do clipe ocupam vagas desse teto e não ficam depois dos
+pôsteres. Fotos e pôsteres de vídeo
 anexados a um post social seguem o mesmo caminho, mesmo quando o texto do post
 não pôde ser lido: entram na interpretação, no documento vetorial e na conferência
 da busca. O arquivo de vídeo do post no X não é baixado. Notas
