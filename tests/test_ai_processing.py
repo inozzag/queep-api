@@ -515,6 +515,65 @@ def test_page_preview_failure_does_not_mark_the_post_media_gap(library, monkeypa
     assert stored.media_incomplete is False
 
 
+def test_retry_reprocesses_ready_post_that_missed_media(library, monkeypatch):
+    from queep.sources import SourceError
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    photo = picture()
+    failed = {"value": True}
+
+    def read_photo(_url):
+        if failed["value"]:
+            raise SourceError("http")
+        return photo
+
+    monkeypatch.setattr("queep.worker.read_photo", read_photo)
+    seen = []
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(data) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/one.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    assert repo.get(uid, ref.id).media_incomplete is True
+    retried = jobs.retry(uid, ref.id, 1)
+    assert retried.status == "queued"
+    assert retried.media_incomplete is False
+    run_id = repo.job(uid, ref.id).get().to_dict()["run_id"]
+    assert jobs.retry(uid, ref.id, 1).status == "queued"
+    assert repo.job(uid, ref.id).get().to_dict()["run_id"] == run_id
+    failed["value"] = False
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.status == "ready"
+    assert stored.media_incomplete is False
+    assert stored.analysis.coverage == "full"
+    assert seen == [None, [photo]]
+    assert repo.collection(uid).document(ref.id).get().to_dict()["media_incomplete"] is False
+
+
+def test_retry_leaves_complete_ready_and_ordinary_partial_alone(library):
+    repo, jobs, uid, ref = library
+    publish(*library)
+    assert jobs.retry(uid, ref.id, 1).status == "ready"
+    assert not repo.job(uid, ref.id).get().exists
+    partial = Interpretation(summary="Trecho da nota", coverage="partial",
+                             limitations=["A análise usou um trecho da nota."])
+    work = jobs.claim(task_for(repo, jobs, uid, repo.save(
+        uid, str(uuid4()), Capture(kind="note", text="Nota longa"))))
+    assert jobs.finish(work, partial, VECTOR)
+    other = work["reference"]
+    assert jobs.retry(uid, other.id, 1).status == "ready"
+    assert repo.get(uid, other.id).media_incomplete is False
+
+
 def test_post_photo_is_stored_and_sent_to_interpreter(library, monkeypatch):
     from tests.test_images import picture
 

@@ -204,12 +204,14 @@ class Jobs:
                 raise HTTPException(404, "Referência não encontrada")
             if old["revision"] != revision:
                 raise HTTPException(409, "A referência mudou. Atualize antes de tentar")
-            if old["status"] != "error":
+            missed = old["status"] == "ready" and bool(old.get("media_incomplete"))
+            if old["status"] != "error" and not missed:
                 return Reference.model_validate(old)
             now = datetime.now(UTC)
             reserve_operation(self.db, uid, tx, now=now, access=access,
                               media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
-            tx.update(doc, {"status": "queued", "updated_at": now})
+            tx.update(doc, {"status": "queued", "updated_at": now, "media_incomplete": False})
             tx.set(job, new_job(uid, ref_id, revision, now) | {"plan": access.plan})
-            return Reference.model_validate({**old, "status": "queued", "updated_at": now})
+            return Reference.model_validate({
+                **old, "status": "queued", "updated_at": now, "media_incomplete": False})
         return self.repo.transact(write)

@@ -6,7 +6,8 @@ Captura confirma conteúdo/outbox → Cloud Tasks → `queep-worker` privado →
 vetor publicados na revisão atual. Dispatcher agendado a cada minuto recupera falhas
 de envio. Jobs usam lease de 360 s, até 3 tentativas e identificadores diferentes por
 execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição/exclusão
-invalida o processamento anterior. O botão de nova tentativa abre outra execução.
+invalida o processamento anterior. O botão de nova tentativa abre outra execução,
+também quando o post ficou pronto sem a foto ou o clipe que a fonte ofereceu.
 
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
 embeddings. Seleciona 10 candidatos e confere correspondência; revalida revisões e
