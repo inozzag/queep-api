@@ -22,6 +22,8 @@ from queep.jobs import Jobs
 from queep.media import MAX_BYTES as MAX_MEDIA_BYTES
 from queep.media import MediaFiles
 from queep.models import (
+    AccountStatus,
+    APIError,
     ArchiveEdit,
     BatchArchive,
     Capture,
@@ -39,6 +41,7 @@ from queep.models import (
     SpaceEdit,
     SpaceMembership,
     SpaceName,
+    UsageSnapshot,
 )
 from queep.repository import Repository
 from queep.search import search
@@ -144,7 +147,16 @@ def subscription_access(uid: UID, subscriptions: Subscriptions):
     return subscriptions.access(uid)
 
 
-@app.get("/v1/usage")
+_UNAUTHORIZED = {"description": "Sessão inválida", "model": APIError}
+_RETRY = {
+    "description": "Falha transitória. Tente novamente após Retry-After.",
+    "model": APIError,
+    "headers": {"Retry-After": {"description": "Segundos até repetir a leitura.",
+                                "schema": {"type": "string"}}},
+}
+
+
+@app.get("/v1/usage", response_model=UsageSnapshot, responses={401: _UNAUTHORIZED, 503: _RETRY})
 def usage(uid: UID, subscriptions: Subscriptions):
     return snapshot(database(), uid, Settings(), access=subscriptions.access(uid))
 
@@ -203,7 +215,8 @@ def write_onboarding(profile: OnboardingProfile, uid: UID):
     return Accounts(database(), image_bucket(), Settings()).save_onboarding(uid, profile)
 
 
-@app.get("/v1/account")
+@app.get("/v1/account", response_model=AccountStatus,
+         responses={401: _UNAUTHORIZED, 503: _RETRY})
 def account_status(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
     uid = account_claims(credentials)["uid"]
     return Accounts(database(), image_bucket(), Settings()).get_status(uid)

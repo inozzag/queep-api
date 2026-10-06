@@ -244,6 +244,28 @@ class OnboardingRecord(OnboardingProfile):
     completed_at: datetime
 
 
+class AccountStatus(BaseModel):
+    status: Literal["active", "scheduled", "deleting", "deleted"]
+    version: int
+    delete_at: datetime | None
+    can_restore: bool
+
+
+class UsageCounter(BaseModel):
+    used: int
+    limit: int
+
+
+class UsageSnapshot(BaseModel):
+    plan: Literal["free", "pro", "max"]
+    resets_at: datetime
+    counters: dict[str, UsageCounter]
+
+
+class APIError(BaseModel):
+    detail: str
+
+
 class SpaceName(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     name: str = Field(min_length=1, max_length=40)
