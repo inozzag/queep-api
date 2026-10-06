@@ -1,6 +1,7 @@
 import asyncio
 import gzip
 import json
+import ssl
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from types import SimpleNamespace
@@ -148,6 +149,12 @@ def pool(monkeypatch, body=b"", headers=None, status=200):
     return seen
 
 
+def test_tls_context_still_verifies_the_server_certificate():
+    context = sources._tls_context()
+    assert context.verify_mode == ssl.CERT_REQUIRED
+    assert context.check_hostname is True
+
+
 def test_connection_uses_validated_ip_but_original_host_and_tls_name(monkeypatch):
     seen = pool(monkeypatch)
     url = sources.checked_url("https://example.com/read?q=1")
@@ -163,8 +170,6 @@ def test_connection_uses_validated_ip_but_original_host_and_tls_name(monkeypatch
     [
         (b"", [(b"content-type", b"video/mp4")], 200, "format"),
         (b"", [(b"content-type", b"text/html"), (b"content-encoding", b"gzip")], 200, "format"),
-        (b"", [(b"content-type", b"text/html"), (b"content-length", b"99999999")], 200, "size"),
-        (b"x" * (sources.MAX_BODY + 1), None, 200, "size"),
         (b"private content", None, 403, "http"),
     ],
 )
@@ -172,6 +177,50 @@ def test_response_limits_before_parsing(monkeypatch, body, headers, status, reas
     pool(monkeypatch, body, headers, status)
     with pytest.raises(sources.SourceError, match=reason):
         asyncio.run(sources.request(sources.checked_url("https://example.com/"), "93.184.215.14"))
+
+
+def test_media_rejects_a_declared_or_actual_oversize_body(monkeypatch):
+    pool(
+        monkeypatch,
+        b"",
+        [(b"content-type", b"image/jpeg"), (b"content-length", b"99999999")],
+    )
+    with pytest.raises(sources.SourceError, match="size"):
+        asyncio.run(
+            sources.request(
+                sources.checked_url("https://example.com/cover.jpg"),
+                "93.184.215.14",
+                allowed=sources.IMAGE_TYPES,
+            )
+        )
+    pool(monkeypatch, b"x" * 80, [(b"content-type", b"image/png")])
+    with pytest.raises(sources.SourceError, match="size"):
+        asyncio.run(
+            sources.request(
+                sources.checked_url("https://example.com/cover.png"),
+                "93.184.215.14",
+                allowed=sources.IMAGE_TYPES,
+                max_body=40,
+            )
+        )
+
+
+def test_oversized_html_keeps_a_bounded_prefix(monkeypatch):
+    description = "A daily prompt for designers who want a sharper brief."
+    head = (
+        "<html><head><title>One Prompt</title>"
+        f'<meta property="og:description" content="{description}" />'
+        "</head><body><script>"
+    ).encode()
+    pool(monkeypatch, head + b"x" * (sources.MAX_BODY + 80))
+    status, headers, decoded = asyncio.run(
+        sources.request(sources.checked_url("https://example.com/"), "93.184.215.14")
+    )
+    assert status == 200 and len(decoded) == sources.MAX_BODY
+    assert decoded.startswith(b"<html><head><title>One Prompt</title>")
+    result = sources.extract(decoded, headers, "https://example.com/")
+    assert result.state == "read" and result.title == "One Prompt"
+    assert "sharper brief" in result.text
 
 
 def test_gzip_page_is_decoded_with_a_decompression_limit(monkeypatch):
@@ -182,9 +231,13 @@ def test_gzip_page_is_decoded_with_a_decompression_limit(monkeypatch):
         sources.request(sources.checked_url("https://example.com"), "93.184.215.14")
     )
     assert decoded == body
-    pool(monkeypatch, gzip.compress(b"x" * (sources.MAX_BODY + 1)), headers)
-    with pytest.raises(sources.SourceError, match="size"):
-        asyncio.run(sources.request(sources.checked_url("https://example.com"), "93.184.215.14"))
+    raw = b"<html><head><title>Kept</title></head>" + b"x" * (sources.MAX_BODY + 1)
+    pool(monkeypatch, gzip.compress(raw), headers)
+    _, _, decoded = asyncio.run(
+        sources.request(sources.checked_url("https://example.com"), "93.184.215.14")
+    )
+    assert decoded == raw[: sources.MAX_BODY]
+    assert decoded.startswith(b"<html><head><title>Kept</title>")
 
 
 def test_github_readme_excludes_navigation_scripts_and_hidden_text():
@@ -588,6 +641,7 @@ def test_behance_project_readers_prefer_official_oembed_then_html():
     assert readers == [
         "https://www.behance.net/services/oembed?url="
         "https%3A%2F%2Fwww.behance.net%2Fgallery%2F123%2FPublic-Project",
+        "https://www.behance.net/embed/project/123",
         "https://www.behance.net/gallery/123/Public-Project",
     ]
 
@@ -726,6 +780,69 @@ def test_behance_html_reads_cover_modules_and_adobe_avatar():
             "clip_url": "https://cdn-prod-ccv.adobe.com/clip.mp4",
         },
         {"url": "https://mir-s3-cdn-cf.behance.net/project_modules/1400/one.png", "kind": "photo"},
+    ]
+
+
+def test_behance_embed_srcset_uses_the_largest_cover_and_profile_alt():
+    from queep.social.behance import BehanceAdapter
+
+    adapter = BehanceAdapter()
+    url = sources.checked_url("https://www.behance.net/gallery/123/Reel")
+    matched = adapter.match(url)
+    cover = "92665c123.Y3JvcCwxMzgwLDEwODAsMjcwLDA.png"
+    body = f"""<html><head><title>Reel 2024 :: Behance</title></head><body>
+        <img alt="Project Cover: Reel 2024" srcset="
+            https://mir-s3-cdn-cf.behance.net/projects/115_webp/{cover} 115w,
+            https://mir-s3-cdn-cf.behance.net/projects/max_808_webp/{cover} 808w">
+        <img alt="Ada Lovelace's profile" src="https://pps.services.adobe.com/avatar.jpg">
+        </body></html>""".encode()
+    result = adapter.parse(body, url, matched)
+    previews = adapter.media(body, url, matched)
+    assert result.author_name == "Ada Lovelace" and result.text == "Reel 2024"
+    slides = [item for item in previews if item["kind"] != "avatar"]
+    assert slides == [{
+        "url": f"https://mir-s3-cdn-cf.behance.net/projects/max_808_webp/{cover}",
+        "kind": "photo",
+    }]
+
+
+def test_behance_oembed_without_thumbnail_keeps_text_and_embed_cover(monkeypatch):
+    oembed = (
+        b'{"type":"rich","title":"Public Project - Ada Lovelace",'
+        b'"author_name":"Ada Lovelace","author_url":"https://www.behance.net/ada",'
+        b'"description":"Uma interface para equipes.",'
+        b'"html":"<iframe src=\\"https://www.behance.net/embed/project/123\\"></iframe>"}'
+    )
+    cover = "https://mir-s3-cdn-cf.behance.net/projects/max_808_webp/cover.png"
+    embed = (
+        b"<html><head><title>Public Project :: Behance</title></head><body>"
+        b'<img alt="Project Cover" srcset="' + cover.encode() + b' 808w">'
+        b'<img alt="Ada Lovelace\'s profile" src="https://pps.services.adobe.com/avatar.jpg">'
+        b"</body></html>"
+    )
+    seen = []
+
+    async def fake_fetch_resolved_body(url):
+        address = str(url)
+        seen.append(address)
+        if "oembed" in address:
+            return oembed, {"content-type": "application/json"}, url
+        if "/embed/project/" in address:
+            return embed, {"content-type": "text/html"}, url
+        raise sources.SourceError("http")
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake_fetch_resolved_body)
+    source, previews = asyncio.run(
+        sources.fetch("https://www.behance.net/gallery/123/Public-Project")
+    )
+    assert source.title == "Ada Lovelace" and source.author_handle == "ada"
+    assert source.text == "Uma interface para equipes."
+    assert "4 imagens" in source.limitations[0]
+    assert [item["url"] for item in previews if item["kind"] != "avatar"] == [cover]
+    assert seen == [
+        "https://www.behance.net/services/oembed?url="
+        "https%3A%2F%2Fwww.behance.net%2Fgallery%2F123%2FPublic-Project",
+        "https://www.behance.net/embed/project/123",
     ]
 
 
@@ -1354,6 +1471,132 @@ def test_fetch_returns_site_favicon_and_og_image(monkeypatch):
         {"url": "https://cursor.com/og.png", "kind": "photo"},
         {"url": "https://cursor.com/favicon.png", "kind": "avatar"},
     ]
+
+
+def test_script_shell_site_keeps_open_graph_summary_and_image(monkeypatch):
+    title = "Saved \u2014 Daily design inspiration"
+    page = (
+        f"<html><head><title>{title}</title>"
+        '<meta property="og:description" content="Curated design from across the internet, '
+        'updated daily.">'
+        '<meta property="og:image" content="https://framerusercontent.com/og.png">'
+        '<link rel="icon" href="/favicon.png">'
+        "</head><body><h1>Saved</h1><script>loadApp()</script></body></html>"
+    ).encode()
+
+    async def fake_fetch_resolved_body(url):
+        return page, {"content-type": "text/html"}, url
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake_fetch_resolved_body)
+    source, previews = asyncio.run(sources.fetch("https://saved.design/"))
+    assert source.content_kind == "page" and source.title == "Saved"
+    assert source.text == "Curated design from across the internet, updated daily."
+    assert previews[0] == {"url": "https://framerusercontent.com/og.png", "kind": "photo"}
+
+
+def test_social_host_that_is_not_a_post_never_uses_the_site_reader(monkeypatch):
+    async def fail(url):
+        pytest.fail(f"site reader fetched {url}")
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fail)
+    for url in (
+        "https://www.instagram.com/explore/",
+        "https://dribbble.com/shots",
+        "https://x.com/search",
+    ):
+        source, previews = asyncio.run(sources.fetch(url))
+        assert source.state == "unavailable" and source.content_kind == "metadata"
+        assert previews is None
+        assert "post ou perfil" in source.limitations[0]
+
+
+def test_dribbble_shot_stays_on_the_dribbble_reader(monkeypatch):
+    seen = []
+
+    async def fail(url):
+        seen.append(str(url))
+        raise sources.SourceError("http")
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fail)
+    source, _ = asyncio.run(
+        sources.read("https://dribbble.com/shots/27696121-Dual-Laundry")
+    )
+    assert source.state == "unavailable" and source.content_kind == "metadata"
+    assert "recusou" in source.limitations[0]
+    assert seen and all("dribbble.com" in item for item in seen)
+
+
+def test_instagram_embed_reads_caption_author_and_image():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/p/CfwXgNprcSA/")
+    matched = adapter.match(url)
+    cdn = "https://scontent.cdninstagram.com/poster.jpg"
+    body = (
+        b"<html><head><title>Instagram</title></head><body>"
+        b'<img class="EmbeddedMediaImage" src="' + cdn.encode() + b'">'
+        b'<div class="Caption"><a class="CaptionUsername" '
+        b'href="https://www.instagram.com/nike/">nike</a>'
+        b"Meet the bold new collection."
+        b'<div class="CaptionComments">View all 808 comments</div></div>'
+        b"</body></html>"
+    )
+    result = adapter.parse(body, url, matched)
+    media = adapter.media(body, url, matched)
+    assert result.author_handle == "nike" and result.title == "nike"
+    assert "bold new collection" in result.text
+    assert "comments" not in result.text and result.text != "Instagram"
+    assert media == [{"url": cdn, "kind": "photo"}]
+
+
+def test_instagram_login_shell_is_not_a_successful_post():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/p/CfwXgNprcSA/")
+    body = b"<html><head><title>Instagram</title></head><body></body></html>"
+    with pytest.raises(sources.SourceError, match="empty"):
+        adapter.parse(body, url, adapter.match(url))
+
+
+def test_instagram_post_stops_at_the_embed_reader(monkeypatch):
+    seen = []
+    page = (
+        b"<html><body>"
+        b'<img class="EmbeddedMediaImage" src="https://scontent.cdninstagram.com/a.jpg">'
+        b'<div class="Caption"><a class="CaptionUsername" '
+        b'href="https://www.instagram.com/nike/">nike</a>'
+        b"A public caption with enough words.</div></body></html>"
+    )
+
+    async def fake_fetch_resolved_body(url):
+        seen.append(str(url))
+        return page, {"content-type": "text/html"}, url
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake_fetch_resolved_body)
+    source, previews = asyncio.run(
+        sources.fetch("https://www.instagram.com/p/CfwXgNprcSA/")
+    )
+    assert source.author_handle == "nike" and "public caption" in source.text
+    assert previews and previews[0]["kind"] == "photo"
+    assert seen == ["https://www.instagram.com/p/CfwXgNprcSA/embed/captioned/"]
+
+
+def test_dribbble_waf_and_missing_page_are_not_a_shot():
+    from queep.social.dribbble import DribbbleAdapter
+
+    adapter = DribbbleAdapter()
+    url = sources.checked_url("https://dribbble.com/shots/27696121-Dual")
+    matched = adapter.match(url)
+    waf = (
+        b"<html><script>window.awsWafCookieDomainList=['dribbble.com'];</script>"
+        b"<title></title></html>"
+    )
+    missing = b"<html><title>Sorry, the page you were looking for doesn't exist.</title></html>"
+    for body in (waf, missing):
+        with pytest.raises(sources.SourceError, match="empty"):
+            adapter.parse(body, url, matched)
 
 
 def test_public_image_never_fetches_private_hosts(monkeypatch):

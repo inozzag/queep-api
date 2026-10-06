@@ -342,6 +342,9 @@ def _media_from_html(soup, page, match):
 class DribbbleAdapter:
     name = "dribbble"
 
+    def owns(self, url):
+        return dribbble_host(url)
+
     def match(self, url) -> SocialMatch | None:
         shot = shot_id(url)
         if shot:
@@ -400,7 +403,17 @@ class DribbbleAdapter:
                 soup = BeautifulSoup(body, "html.parser")
             except (TypeError, ValueError) as error:
                 raise SourceError("empty") from error
+            blob = body if isinstance(body, (bytes, bytearray)) else str(body).encode()
+            if b"awsWafCookieDomainList" in blob or b"gokuProps" in blob:
+                raise SourceError("empty")
             page_title = soup.title.get_text(" ", strip=True) if soup.title else ""
+            if re.search(
+                r"just a moment|access denied|attention required|"
+                r"doesn't exist|does not exist",
+                page_title,
+                re.I,
+            ):
+                raise SourceError("empty")
             og_title = _meta(soup, "og:title", "twitter:title") or page_title
             name, handle = _identity_from_html(soup, match, og_title, url)
             if match.role == "profile":

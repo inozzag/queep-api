@@ -73,6 +73,9 @@ def profile_handle(url):
 class InstagramAdapter:
     name = "instagram"
 
+    def owns(self, url):
+        return instagram_host(url)
+
     def match(self, url):
         code = post_code(url)
         if code:
@@ -108,8 +111,10 @@ class InstagramAdapter:
 
         payload = _payload(body, url)
         if match.role == "profile":
-            name = payload.get("author") or match.key
             handle = payload.get("handle") or match.key
+            name = payload.get("author") or handle
+            if name.casefold() in {"instagram", "post"}:
+                name = handle
             return SourceContent(
                 content_kind="profile",
                 state="read",
@@ -129,7 +134,8 @@ class InstagramAdapter:
         handle = (payload.get("handle") or "").lstrip("@")
         text = (payload.get("caption") or "").strip()
         slides = payload.get("slides") or []
-        if len(text) < 8 and not author and not handle and not slides:
+        identity = (author or handle).casefold()
+        if len(text) < 8 and not slides and identity in {"", "instagram", "post"}:
             raise SourceError("empty")
         return SourceContent(
             content_kind="metadata",
@@ -216,6 +222,9 @@ def _payload(body, page):
         parsed = _from_embedded_json(raw, page)
         if parsed:
             return parsed
+    embed = _from_embed(soup, page)
+    if embed:
+        return embed
     title = soup.title.get_text(" ", strip=True) if soup.title else ""
     description = meta_content(soup, "og:description")
     og_title = meta_content(soup, "og:title") or title
@@ -316,6 +325,78 @@ def _from_instafix(value, page):
         "avatar": avatar,
         "slides": slides,
     }
+
+
+def _from_embed(soup, page):
+    """Public embed HTML. Instagram serves the caption and image here, not in Open Graph."""
+    handle = _embed_handle(soup)
+    slides = _embed_slides(soup, page)
+    caption = _embed_caption(soup, handle)
+    if not handle and not slides and len(caption) < 8:
+        return None
+    return {
+        "author": handle,
+        "handle": handle,
+        "caption": caption,
+        "avatar": None,
+        "slides": slides,
+    }
+
+
+def _embed_handle(soup):
+    anchor = soup.select_one("a.CaptionUsername, a.Username")
+    if not anchor:
+        return ""
+    href = anchor.get("href") if isinstance(anchor.get("href"), str) else ""
+    found = re.search(r"instagram\.com/([A-Za-z0-9._]{1,30})(?:/|[?#]|$)", href, re.I)
+    if found and found.group(1).lower() not in RESERVED:
+        return found.group(1)
+    text = anchor.get_text(" ", strip=True).lstrip("@")
+    if re.fullmatch(r"[A-Za-z0-9._]{1,30}", text) and text.lower() not in RESERVED:
+        return text
+    return ""
+
+
+def _embed_caption(soup, handle):
+    root = soup.select_one("div.Caption")
+    if not root:
+        return ""
+    for node in root.select(".CaptionComments, a.CaptionUsername"):
+        node.decompose()
+    text = re.sub(r"\n{3,}", "\n\n", root.get_text("\n", strip=True)).strip()
+    if handle and text.casefold().startswith(handle.casefold()):
+        text = text[len(handle):].lstrip(" \n:.-")
+    return text
+
+
+def _embed_slides(soup, page):
+    slides, seen = [], set()
+    for video in soup.select("video")[:4]:
+        poster = _media_url(video.get("poster"), page)
+        clip = _media_url(video.get("src"), page)
+        if not clip:
+            source = video.find("source")
+            if source:
+                clip = _media_url(source.get("src"), page)
+        if clip and not _looks_like_video(clip):
+            clip = None
+        if poster and poster not in seen:
+            seen.add(poster)
+            slides.append(_video_slide(poster, clip))
+        elif clip and clip not in seen:
+            seen.add(clip)
+            slides.append({"url": clip, "kind": "video", "clip_url": clip})
+        if len(slides) >= 4:
+            return slides
+    for image in soup.select("img.EmbeddedMediaImage"):
+        address = _media_url(image.get("src"), page)
+        if not address or address in seen or _looks_like_video(address):
+            continue
+        seen.add(address)
+        slides.append({"url": address, "kind": "photo"})
+        if len(slides) >= 4:
+            break
+    return slides
 
 
 def _from_jsonld(value, page):

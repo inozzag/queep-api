@@ -6,6 +6,12 @@ from queep.social.types import SocialMatch
 class TwitterAdapter:
     name = "twitter"
 
+    def owns(self, url):
+        host = (url.host or "").lower().rstrip(".")
+        return host in {"x.com", "twitter.com", "mobile.twitter.com"} or host.endswith(
+            (".twitter.com", ".x.com")
+        )
+
     def match(self, url):
         from queep.sources import tweet_status_id, twitter_profile_handle
 

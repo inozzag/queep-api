@@ -3,8 +3,10 @@
 import asyncio
 import ipaddress
 import json
+import logging
 import re
 import socket
+import ssl
 import zlib
 from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlencode, urljoin
@@ -16,6 +18,8 @@ import httpx
 from bs4 import BeautifulSoup
 
 from queep.models import SourceContent
+
+logger = logging.getLogger(__name__)
 
 MAX_BODY = 2 * 1024 * 1024
 MAX_TEXT = 12000  # UTF-8 bytes, before any model-specific clipping.
@@ -127,6 +131,15 @@ MAX_PHOTO = 12 * 1024 * 1024
 MAX_SOCIAL_CLIP = 25 * 1024 * 1024
 
 
+def _tls_context():
+    """Stdlib HTTPS handshake. A ClientHello without HTTP/1.1 ALPN is challenged."""
+    context = ssl.create_default_context()
+    context.set_alpn_protocols(["http/1.1"])
+    if context.post_handshake_auth is not None:
+        context.post_handshake_auth = True
+    return context
+
+
 async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
     pinned = url.copy_with(host=address)
     accept = (
@@ -144,7 +157,7 @@ async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
     }
     # HTTP core has no environment proxy/cookie jar. A fresh pool per hop prevents
     # sharing a connection across virtual hosts. TLS still verifies the original host.
-    async with httpcore.AsyncConnectionPool(retries=0) as pool:
+    async with httpcore.AsyncConnectionPool(retries=0, ssl_context=_tls_context()) as pool:
         async with pool.stream(
             "GET",
             str(pinned),
@@ -170,24 +183,54 @@ async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
             if encoding not in ("identity", "gzip"):
                 raise SourceError("format")
             length = metadata.get("content-length", "")
-            if length.isdecimal() and int(length) > max_body:
+            # Pages keep a bounded prefix: script shells often gzip past the cap
+            # while the title and Open Graph tags sit in the first bytes.
+            # Images and video stay a hard limit — a partial file is not usable.
+            bounded_text = kind in TEXT_TYPES
+            if not bounded_text and length.isdecimal() and int(length) > max_body:
                 raise SourceError("size")
             body = bytearray()
             decoder = zlib.decompressobj(16 + zlib.MAX_WBITS) if encoding == "gzip" else None
             wire_bytes = 0
+            stopped = False
             async for chunk in response.aiter_stream():
+                cut_wire = False
+                if bounded_text:
+                    room = max_body - wire_bytes
+                    if room <= 0:
+                        stopped = True
+                        break
+                    if len(chunk) > room:
+                        chunk = chunk[:room]
+                        cut_wire = True
                 wire_bytes += len(chunk)
-                if wire_bytes > max_body:
+                if not bounded_text and wire_bytes > max_body:
                     raise SourceError("size")
                 if decoder:
+                    if bounded_text and len(body) >= max_body:
+                        stopped = True
+                        break
+                    limit = (
+                        max_body - len(body) if bounded_text else max_body + 1 - len(body)
+                    )
                     try:
-                        chunk = decoder.decompress(chunk, max_body + 1 - len(body))
+                        chunk = decoder.decompress(chunk, limit)
                     except zlib.error as error:
                         raise SourceError("format") from error
-                if len(body) + len(chunk) > max_body:
+                    if bounded_text and (
+                        decoder.unconsumed_tail or len(body) + len(chunk) >= max_body
+                    ):
+                        stopped = True
+                if not bounded_text and len(body) + len(chunk) > max_body:
                     raise SourceError("size")
+                if bounded_text and len(body) + len(chunk) > max_body:
+                    chunk = chunk[: max_body - len(body)]
+                    stopped = True
                 body.extend(chunk)
-            if decoder and (not decoder.eof or decoder.unused_data):
+                if stopped or cut_wire:
+                    stopped = True
+                    break
+            if decoder and not stopped and (not decoder.eof or decoder.unused_data):
                 raise SourceError("format")
             return response.status, metadata, bytes(body)
 
@@ -199,17 +242,22 @@ def extract(body, metadata, url):
         raise SourceError("format")
     if kind in ("text/plain", "text/markdown"):
         text = body.decode("utf-8", errors="replace").strip()
+        if len(text) < 80:
+            raise SourceError("empty")
     else:
         soup = BeautifulSoup(body, "html.parser")
         title = soup.title.get_text(" ", strip=True) if soup.title else ""
         if re.search(
-            r"just a moment|access denied|sign in|log in|attention required|"
+            r"just a moment|access denied|\bsign in\b|\blog in\b|attention required|"
             r"verify you are human|iniciar sess[aã]o",
             title,
             re.I,
         ):
             raise SourceError("empty")
         product = page_product_name(soup, title)
+        description = meta_content(
+            soup, "og:description", "twitter:description", "description"
+        )
         for node in soup.select(
             "script,style,noscript,template,nav,header,footer,aside,"
             "form,button,svg,[hidden],[aria-hidden='true']"
@@ -223,8 +271,11 @@ def extract(body, metadata, url):
             line.strip() for line in content.get_text("\n", strip=True).splitlines() if line.strip()
         )
         title = product or title
-    if len(text) < 80:
-        raise SourceError("empty")
+        if len(text) < 80:
+            summary = _meta_summary(description)
+            if len(summary) < 24 or _blocked_summary(summary):
+                raise SourceError("empty")
+            text = summary
     truncated = len(text.encode()) > MAX_TEXT
     limitations = [READ_LIMITATION]
     if truncated:
@@ -240,6 +291,22 @@ def extract(body, metadata, url):
         native_title=False,
         limitations=limitations,
     )
+
+
+def _meta_summary(value):
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    text = BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _blocked_summary(value):
+    return bool(re.search(
+        r"just a moment|access denied|attention required|verify you are human|"
+        r"iniciar sess[aã]o",
+        value,
+        re.I,
+    ))
 
 
 def meta_content(soup, *names):
@@ -915,17 +982,38 @@ def with_author_avatar(body, previews):
     return previews
 
 
+def social_miss(url):
+    """A known network whose path is not a public post or profile. Never a website."""
+    return (
+        SourceContent(
+            content_kind="metadata",
+            state="unavailable",
+            url=str(url),
+            fetched_at=datetime.now(UTC),
+            limitations=["Este endereço da rede não é um post ou perfil público."],
+        ),
+        None,
+    )
+
+
 async def fetch(raw):
     original = checked_url(raw)
-    from queep.social import resolve
+    from queep.social import owner, resolve
 
     adapter, match = resolve(original)
     if adapter:
         return await fetch_network(adapter, original, match)
+    if owner(original):
+        return social_miss(original)
     endpoint = social_endpoint(original)
     if endpoint:
         body, _, _ = await fetch_resolved_body(checked_url(endpoint))
         return video_metadata(body, original), None
+    return await fetch_site(original)
+
+
+async def fetch_site(original):
+    """Public page: body text, or the Open Graph summary when the page is a script shell."""
     body, headers, final = await fetch_resolved_body(original)
     source = extract(body, headers, final)
     if source.content_kind != "page":
@@ -936,19 +1024,40 @@ async def fetch(raw):
 async def fetch_network(adapter, original, match):
     last = None
     previews = []
+    # Behance oEmbed often has the author and no thumbnail. Keep that text and
+    # let the official embed reader supply the cover.
+    saved = None
     for endpoint in adapter.readers(original, match):
         try:
             body, _, _ = await fetch_resolved_body(checked_url(endpoint))
         except SourceError as error:
             last = error
             continue
-        media = adapter.media(body, original, match) or []
-        if media:
-            previews = media
         try:
-            return adapter.parse(body, original, match), previews
+            media = adapter.media(body, original, match) or []
+            parsed = adapter.parse(body, original, match)
         except SourceError as error:
             last = error
+            continue
+        except Exception:
+            logger.warning("social_reader_failed", exc_info=True)
+            last = SourceError("empty")
+            continue
+        visible = [item for item in media if item.get("kind") != "avatar"]
+        if saved is not None:
+            if visible:
+                attach = getattr(adapter, "attach_gallery", None)
+                if attach:
+                    saved = attach(saved, media)
+                return saved, media
+            continue
+        if not visible and adapter.name == "behance" and match.role == "post":
+            saved = parsed
+            previews = media
+            continue
+        return parsed, media
+    if saved is not None:
+        return saved, previews
     fallback = adapter.fallback(original, match, previews)
     if fallback is not None:
         return fallback, previews
@@ -992,8 +1101,10 @@ async def read(raw):
         ValueError,
     ):
         reason = "network"
+    kind = "metadata" if _social_host(raw) else "page"
     return (
         SourceContent(
+            content_kind=kind,
             state="unavailable",
             url=clip(raw, 4096),
             fetched_at=datetime.now(UTC),
@@ -1001,6 +1112,15 @@ async def read(raw):
         ),
         None,
     )
+
+
+def _social_host(raw):
+    try:
+        from queep.social import owner
+
+        return owner(checked_url(raw)) is not None
+    except SourceError:
+        return False
 
 
 def read_link(url):
