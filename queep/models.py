@@ -3,7 +3,15 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class Capture(BaseModel):
@@ -244,11 +252,20 @@ class OnboardingRecord(OnboardingProfile):
     completed_at: datetime
 
 
+def _iso(value: datetime | None):
+    # Match jsonable_encoder so these GETs stay byte-compatible with the other account routes.
+    return None if value is None else value.isoformat()
+
+
 class AccountStatus(BaseModel):
     status: Literal["active", "scheduled", "deleting", "deleted"]
     version: int
     delete_at: datetime | None
     can_restore: bool
+
+    @field_serializer("delete_at")
+    def serialize_delete_at(self, value: datetime | None):
+        return _iso(value)
 
 
 class UsageCounter(BaseModel):
@@ -260,6 +277,10 @@ class UsageSnapshot(BaseModel):
     plan: Literal["free", "pro", "max"]
     resets_at: datetime
     counters: dict[str, UsageCounter]
+
+    @field_serializer("resets_at")
+    def serialize_resets_at(self, value: datetime):
+        return _iso(value)
 
 
 class APIError(BaseModel):
