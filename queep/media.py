@@ -5,6 +5,7 @@ import json
 import math
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,13 +13,24 @@ from pathlib import Path
 from fastapi import HTTPException
 from google.api_core.exceptions import GoogleAPICallError, NotFound
 
-from queep.images import CARD_EDGE, SHARP_EDGE, Images, cached_preview, preview_edge
+from queep.images import (
+    CARD_EDGE,
+    SHARP_EDGE,
+    Images,
+    _preview_slots,
+    preview_edge,
+    recall_bytes,
+    remember_bytes,
+)
 from queep.models import MediaInfo
 
 MAX_BYTES = 25 * 1024 * 1024
 MAX_SECONDS = 300
 FRAME_COUNT = 8
 SOCIAL_SECONDS = 15
+LOOP_SECONDS = 8
+LOOP_EDGE = 960
+MAX_LOOP_BYTES = 4 * 1024 * 1024
 
 
 def run(command, timeout=25):
@@ -100,7 +112,7 @@ def poster_from_video(data: bytes) -> bytes:
         return thumb.read_bytes()
 
 
-def ffmpeg(path, *output, timeout=40, seek=None):
+def ffmpeg(path, *output, timeout=40, seek=None, formats="mov,mp3,wav"):
     return run(
         [
             "ffmpeg",
@@ -117,7 +129,7 @@ def ffmpeg(path, *output, timeout=40, seek=None):
             "-protocol_whitelist",
             "file,pipe",
             "-format_whitelist",
-            "mov,mp3,wav",
+            formats,
             *(["-ss", str(seek)] if seek else []),
             "-i",
             str(path),
@@ -127,11 +139,60 @@ def ffmpeg(path, *output, timeout=40, seek=None):
     )
 
 
+def _encode_loop(source, target, edge, crf):
+    try:
+        ffmpeg(
+            source,
+            "-map",
+            "0:v:0",
+            "-an",
+            "-t",
+            str(LOOP_SECONDS),
+            "-vf",
+            f"scale={edge}:{edge}:force_original_aspect_ratio=decrease,format=yuv420p",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            str(crf),
+            "-movflags",
+            "+faststart",
+            target,
+            timeout=25,
+            formats="mov,mp4,gif",
+        )
+    except HTTPException:
+        return None
+    if not target.exists() or target.stat().st_size < 32:
+        return None
+    return target.read_bytes()
+
+
+def preview_loop(data: bytes) -> bytes | None:
+    """Muted H.264 gallery preview: the whole GIF, or the first 8 seconds of a video."""
+    if not data or len(data) < 32 or len(data) > MAX_BYTES:
+        return None
+    try:
+        with tempfile.TemporaryDirectory(prefix="queep-loop-") as folder:
+            source = Path(folder) / "input"
+            source.write_bytes(data)
+            encoded = _encode_loop(source, Path(folder) / "loop.mp4", LOOP_EDGE, 28)
+            if encoded is None or len(encoded) > MAX_LOOP_BYTES:
+                encoded = _encode_loop(source, Path(folder) / "loop-small.mp4", 640, 33)
+            if not encoded or len(encoded) > MAX_LOOP_BYTES:
+                return None
+            return encoded
+    except (OSError, ValueError):
+        return None
+
+
 @dataclass
 class PreparedMedia:
     original: bytes
     thumbnail: bytes | None
     info: MediaInfo
+    loop: bytes | None = None
 
 
 def prepare(data):
@@ -183,6 +244,7 @@ def prepare(data):
                 thumb,
             )
             thumbnail = thumb.read_bytes()
+        loop = preview_loop(original) if video else None
         return PreparedMedia(
             original,
             thumbnail,
@@ -194,7 +256,9 @@ def prepare(data):
                 has_audio=has_audio,
                 width=video["width"] if video else None,
                 height=video["height"] if video else None,
+                loop=bool(loop),
             ),
+            loop,
         )
 
 
@@ -352,21 +416,34 @@ class MediaFiles(Images):
         result = [("original", media.original, media.info.content_type)]
         if media.thumbnail:
             result.append(("thumbnail", media.thumbnail, "image/jpeg"))
+        if media.loop:
+            result.append(("loop", media.loop, "video/mp4"))
         return result
 
-    def read(self, uid, ref_id, thumbnail=False):
+    def read(self, uid, ref_id, thumbnail=False, loop=False):
         reference = self.repo.get(uid, ref_id)
-        if not reference.media or (thumbnail and reference.kind != "video"):
+        if not reference.media or ((thumbnail or loop) and reference.kind != "video"):
             raise HTTPException(404, "Mídia não encontrada")
         prefix = self.prefix(uid, ref_id, reference.media.sha256)
+        if loop:
+            if not reference.media.loop:
+                raise HTTPException(404, "Mídia não encontrada")
+            return self._download(f"{prefix}/loop"), "video/mp4"
         name = "thumbnail" if thumbnail else "original"
         path = f"{prefix}/{name}"
-        try:
-            data = self.bucket.blob(path).download_as_bytes(timeout=30, retry=None)
-        except NotFound as error:
-            raise HTTPException(404, "Mídia não encontrada") from error
-        except GoogleAPICallError as error:
-            raise HTTPException(503, "Não foi possível carregar a mídia") from error
+        if thumbnail:
+            data = self._download(path)
+            content_type = "image/jpeg"
+        else:
+            try:
+                data = self.bucket.blob(path).download_as_bytes(timeout=30, retry=None)
+            except NotFound as error:
+                raise HTTPException(404, "Mídia não encontrada") from error
+            except GoogleAPICallError as error:
+                raise HTTPException(503, "Não foi possível carregar a mídia") from error
+            content_type = reference.media.content_type
+        if not thumbnail:
+            return data, content_type
         video_edge = max(reference.media.width or 0, reference.media.height or 0)
         if thumbnail and video_edge > SHARP_EDGE and preview_edge(data) < SHARP_EDGE:
             sharp = self._poster(prefix)
@@ -375,27 +452,44 @@ class MediaFiles(Images):
         return data, "image/jpeg" if thumbnail else reference.media.content_type
 
     def _poster(self, prefix):
-        def build():
-            card_path = f"{prefix}/card"
-            blob = self.bucket.blob(card_path)
-            try:
-                return blob.download_as_bytes(timeout=20, retry=None)
-            except NotFound:
-                pass
-            except GoogleAPICallError:
-                return None
-            try:
-                source = self.bucket.blob(f"{prefix}/original")
-                card = poster_from_video(source.download_as_bytes(timeout=30, retry=None))
-            except (HTTPException, GoogleAPICallError, OSError):
-                return None
-            try:
-                blob.upload_from_string(card, content_type="image/jpeg", timeout=20)
-            except GoogleAPICallError:
-                pass
-            return card
-
+        """Return a stored sharp poster. Build a missing one without holding the gallery request."""
+        card_path = f"{prefix}/card"
+        cached = recall_bytes(card_path)
+        if cached is not None:
+            return cached
+        blob = self.bucket.blob(card_path)
         try:
-            return cached_preview(f"{prefix}/card", build)
-        except Exception:
+            data = blob.download_as_bytes(timeout=8, retry=None)
+        except NotFound:
+            self._schedule_poster(prefix)
             return None
+        except GoogleAPICallError:
+            return None
+        remember_bytes(card_path, data)
+        return data
+
+    def _schedule_poster(self, prefix):
+        if not _preview_slots.acquire(blocking=False):
+            return
+
+        def build():
+            try:
+                card_path = f"{prefix}/card"
+                if recall_bytes(card_path):
+                    return
+                try:
+                    source = self.bucket.blob(f"{prefix}/original")
+                    card = poster_from_video(source.download_as_bytes(timeout=30, retry=None))
+                except (HTTPException, GoogleAPICallError, OSError):
+                    return
+                try:
+                    self.bucket.blob(card_path).upload_from_string(
+                        card, content_type="image/jpeg", timeout=20
+                    )
+                except GoogleAPICallError:
+                    pass
+                remember_bytes(card_path, card)
+            finally:
+                _preview_slots.release()
+
+        threading.Thread(target=build, name="queep-poster", daemon=True).start()

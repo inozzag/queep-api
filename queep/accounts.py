@@ -183,7 +183,7 @@ class Accounts:
             job_id = self.repo.job(uid, upload["reference_id"]).id
             for prefix in Images.object_prefixes(job_id, upload):
                 # Keep the reservation until existing writers have had time to stop.
-                for name in ("original", "thumbnail", "card"):
+                for name in ("original", "thumbnail", "card", "motion", "loop"):
                     try:
                         self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
                     except NotFound:
