@@ -316,6 +316,36 @@ def test_attach_preview_marks_video_poster(client, account):
     assert record["images"][0]["preview_kind"] == "video"
 
 
+def test_attach_preview_stores_a_looping_gif(client, account):
+    from queep.media import preview_loop
+
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    created = client.put(
+        path,
+        json={"kind": "link", "url": "https://x.com/a/status/2099804636328648823"},
+        headers=headers,
+    )
+    assert created.status_code == 200, created.text
+    frames = [Image.new("RGB", (16, 16), "red"), Image.new("RGB", (16, 16), "blue")]
+    gif = BytesIO()
+    frames[0].save(gif, format="GIF", save_all=True, append_images=frames[1:], duration=80, loop=0)
+    loop = preview_loop(gif.getvalue())
+    assert loop and b"ftyp" in loop[:32]
+    info = media().attach_preview(uid, ref_id, picture("blue"), preview_kind="gif", motion=loop)
+    assert info.preview_kind == "gif" and info.motion is True
+    record = client.get(path, headers=headers).json()
+    assert record["images"][0]["preview_kind"] == "gif"
+    assert record["images"][0]["motion"] is True
+    played = client.get(path + "/image", params={"motion": "true"}, headers=headers)
+    assert played.status_code == 200
+    assert played.headers["content-type"].startswith("video/mp4")
+    assert played.content == loop
+    assert client.get(path + "/image", params={"motion": "true", "role": "author"},
+                      headers=headers).status_code == 404
+
+
 def test_attach_author_is_served_apart_from_the_gallery(client, account):
     uid, headers = account
     ref_id = str(uuid4())

@@ -447,7 +447,7 @@ def test_instagram_mixed_carousel_clip_only_on_first_video():
     media = [item for item in adapter.media(body, url, match) if item["kind"] != "avatar"]
     assert media[0]["kind"] == "photo"
     assert media[1]["clip_url"].endswith("first.mp4")
-    assert "clip_url" not in media[2]
+    assert media[2]["clip_url"].endswith("second.mp4")
     assert adapter.parse(body, url, match).author_handle == "ada"
 
 
@@ -741,7 +741,7 @@ def test_behance_store_keeps_module_order_and_first_clip_only():
         f"{cdn}/1400/four.png",
     ]
     assert slides[1]["clip_url"].endswith("first.mp4")
-    assert "clip_url" not in slides[2]
+    assert slides[2]["clip_url"].endswith("second.mp4")
     assert media[0] == {"url": "https://pps.services.adobe.com/avatar.jpg", "kind": "avatar"}
     assert "127.0.0.1" not in str(media)
 
@@ -1189,6 +1189,20 @@ def test_tweet_media_previews_keep_video_posters_in_carousel_order():
     assert all("video.twimg.com" not in item["url"] for item in sources.tweet_media_previews(body))
 
 
+def test_tweet_gif_keeps_its_mp4_for_playback():
+    body = (
+        b'{"tweet":{"text":"Hello there world ok ok.","author":{"name":"Ada"},'
+        b'"media":{"all":['
+        b'{"type":"gif","url":"https://video.twimg.com/tweet_video/loop.mp4",'
+        b'"thumbnail_url":"https://pbs.twimg.com/tweet_video_thumb/loop.jpg"}'
+        b']}}}'
+    )
+    assert sources.tweet_media_previews(body) == [
+        {"url": "https://pbs.twimg.com/tweet_video_thumb/loop.jpg", "kind": "gif",
+         "clip_url": "https://video.twimg.com/tweet_video/loop.mp4"},
+    ]
+
+
 def test_tweet_media_previews_read_videos_array_without_all():
     body = (
         b'{"tweet":{"text":"Watch this.","author":{"name":"Ada"},'
@@ -1299,7 +1313,7 @@ def test_tweet_fetch_falls_back_to_official_oembed_when_full_text_fails(monkeypa
     assert any("publish.x.com" in item for item in seen)
 
 
-def test_tweet_media_previews_keep_clip_url_only_on_first_video():
+def test_tweet_media_previews_keep_every_video_clip():
     body = (
         b'{"tweet":{"text":"Dois clips.","author":{"name":"Ada"},'
         b'"media":{"all":['
@@ -1311,7 +1325,7 @@ def test_tweet_media_previews_keep_clip_url_only_on_first_video():
     )
     previews = sources.tweet_media_previews(body)
     assert previews[0]["clip_url"] == "https://video.twimg.com/amplify_video/one.mp4"
-    assert "clip_url" not in previews[1]
+    assert previews[1]["clip_url"] == "https://video.twimg.com/amplify_video/two.mp4"
     assert previews[1]["kind"] == "video"
 
 

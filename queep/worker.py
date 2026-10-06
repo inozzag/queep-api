@@ -17,9 +17,9 @@ from queep.budget import Budget
 from queep.config import Settings, database, firebase_app, image_bucket
 from queep.cost_context import attribution
 from queep.dispatch import enqueue
-from queep.images import Images, as_stored_image
+from queep.images import Images, animated_gif, as_jpeg, as_stored_image
 from queep.jobs import Jobs
-from queep.media import MediaFiles, evidence, social_evidence
+from queep.media import MediaFiles, evidence, preview_loop, social_evidence
 from queep.models import Interpretation
 from queep.social import is_profile, owner
 from queep.sources import (
@@ -109,9 +109,10 @@ def as_previews(raw):
         if isinstance(item, str):
             items.append({"url": item, "kind": "photo"})
         elif isinstance(item, dict) and isinstance(item.get("url"), str):
-            kind = item["kind"] if item.get("kind") in ("photo", "video", "avatar") else "photo"
+            raw_kind = item.get("kind")
+            kind = raw_kind if raw_kind in ("photo", "video", "avatar", "gif") else "photo"
             entry = {"url": item["url"], "kind": kind}
-            if kind == "video" and isinstance(item.get("clip_url"), str):
+            if kind in ("video", "gif") and isinstance(item.get("clip_url"), str):
                 entry["clip_url"] = item["clip_url"]
             items.append(entry)
     return items[:5]
@@ -124,6 +125,8 @@ def load_photo(url):
         try:
             host = checked_url(url).host
             data = read_photo(url) if host in PHOTO_HOSTS else read_public_image(url)
+            if animated_gif(data):
+                return data
             return as_stored_image(data)
         except SourceError as error:
             if str(error) != "transient" or attempt == 2:
@@ -194,9 +197,10 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
             all_previews = as_previews(bundle)
             author = next((item for item in all_previews if item["kind"] == "avatar"), None)
             previews = [] if profile else [
-                item for item in all_previews if item["kind"] in ("photo", "video")
+                item for item in all_previews if item["kind"] in ("photo", "video", "gif")
             ][:4]
             infos = []
+            evidence_clip = None
             if author and images:
                 try:
                     photo = load_photo(author["url"])
@@ -208,8 +212,32 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 for preview in previews:
                     try:
                         photo = load_photo(preview["url"])
-                        info = images.attach_preview(
-                            work["uid"], ref.id, photo, preview_kind=preview["kind"])
+                        clip_bytes = None
+                        motion = None
+                        raw_kind = preview["kind"]
+                        kind = raw_kind if raw_kind in ("photo", "video", "gif") else "photo"
+                        if kind in ("video", "gif") and preview.get("clip_url"):
+                            try:
+                                clip_bytes = load_clip(preview["clip_url"])
+                            except Exception:
+                                logger.warning("post_clip_skipped", extra={"uid": work["uid"]},
+                                               exc_info=True)
+                            if clip_bytes:
+                                if evidence_clip is None:
+                                    evidence_clip = clip_bytes
+                                motion = preview_loop(clip_bytes)
+                        elif animated_gif(photo):
+                            kind = "gif"
+                            motion = preview_loop(photo)
+                            photo = as_jpeg(photo)
+                        if kind == "gif" and not motion:
+                            kind = "photo"
+                        if motion:
+                            info = images.attach_preview(
+                                work["uid"], ref.id, photo, preview_kind=kind, motion=motion)
+                        else:
+                            info = images.attach_preview(
+                                work["uid"], ref.id, photo, preview_kind=kind)
                         infos.append(info)
                         if not page:
                             frames.append(photo)
@@ -219,11 +247,9 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 logger.info("post_photos_attached %s/%s", len(infos), len(previews))
                 if infos:
                     ref = ref.model_copy(update={"image": infos[0], "images": infos})
-            clip_url = None if profile or page else next(
-                (item.get("clip_url") for item in previews if item.get("clip_url")), None)
-            if clip_url:
+            if evidence_clip and not page:
                 try:
-                    clip = social_evidence(load_clip(clip_url))
+                    clip = social_evidence(evidence_clip)
                     frames.extend(frame for _, frame in clip.frames)
                     if clip.audio:
                         speech = ai.transcribe_speech(clip.audio)

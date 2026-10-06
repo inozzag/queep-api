@@ -120,6 +120,7 @@ IMAGE_TYPES = (
     "image/pjpeg",
     "image/png",
     "image/webp",
+    "image/gif",
     "image/x-icon",
     "image/vnd.microsoft.icon",
 )
@@ -142,7 +143,7 @@ def _tls_context():
 async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
     pinned = url.copy_with(host=address)
     accept = (
-        "image/jpeg,image/png,image/webp,image/x-icon,image/vnd.microsoft.icon"
+        "image/jpeg,image/png,image/webp,image/gif,image/x-icon,image/vnd.microsoft.icon"
         if allowed == IMAGE_TYPES
         else "video/mp4,application/octet-stream"
         if allowed == VIDEO_TYPES
@@ -649,7 +650,9 @@ def tweet_media_previews(body):
         previews, seen = [], set()
 
         def add(raw, kind, clip=None):
-            if len(previews) >= 4 or not isinstance(raw, str) or kind not in ("photo", "video"):
+            if len(previews) >= 4 or not isinstance(raw, str):
+                return
+            if kind not in ("photo", "video", "gif"):
                 return
             try:
                 url = checked_url(raw)
@@ -664,7 +667,7 @@ def tweet_media_previews(body):
             seen.add(address)
             seen.add(key)
             item = {"url": address, "kind": kind}
-            if kind == "video" and clip and not any(entry.get("clip_url") for entry in previews):
+            if kind in ("video", "gif") and clip:
                 item["clip_url"] = clip
             previews.append(item)
 
@@ -680,7 +683,11 @@ def tweet_media_previews(body):
                 continue
             media_type = item.get("type")
             if media_type == "gif":
-                add(tweet_video_thumbnail(item), "photo")
+                clip = tweet_clip_url(item)
+                if clip:
+                    add(tweet_video_thumbnail(item), "gif", clip=clip)
+                else:
+                    add(tweet_video_thumbnail(item), "photo")
             elif media_type == "video":
                 add(tweet_video_thumbnail(item), "video", clip=tweet_clip_url(item))
             elif media_type == "photo":

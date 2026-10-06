@@ -67,7 +67,9 @@ class ImageInfo(BaseModel):
     width: int
     height: int
     byte_count: int
-    preview_kind: Literal["photo", "video"] = "photo"
+    preview_kind: Literal["photo", "video", "gif"] = "photo"
+    # True when a muted looping preview is stored next to the still image.
+    motion: bool = False
 
 
 class SourceContent(BaseModel):
@@ -92,6 +94,8 @@ class MediaInfo(BaseModel):
     has_audio: bool
     width: int | None = None
     height: int | None = None
+    # True when an 8s muted preview is stored for gallery playback.
+    loop: bool = False
 
 
 class Reference(BaseModel):

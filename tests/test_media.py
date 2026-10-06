@@ -77,6 +77,7 @@ def test_media_upload_retry_playback_isolation_and_deletion(client, account, vid
     assert first.status_code == 200, first.text
     ref = first.json()
     assert ref["kind"] == kind and ref["media"]["has_audio"]
+    assert ref["media"]["loop"] is (kind == "video")
     assert 1.9 < ref["media"]["duration_seconds"] < 2.2
     assert client.put(path + "/media", content=data, headers=headers).json() == ref
     assert (
@@ -92,6 +93,11 @@ def test_media_upload_retry_playback_isolation_and_deletion(client, account, vid
     assert client.get(path + "/media?thumbnail=true", headers=headers).status_code == (
         200 if kind == "video" else 404
     )
+    loop = client.get(path + "/media?loop=true", headers=headers)
+    assert loop.status_code == (200 if kind == "video" else 404)
+    if kind == "video":
+        assert loop.headers["content-type"].startswith("video/mp4")
+        assert len(loop.content) > 32
     stranger = httpx.post(
         "http://127.0.0.1:9099/identitytoolkit.googleapis.com/v1/accounts:signUp?key=local",
         json={"returnSecureToken": True},

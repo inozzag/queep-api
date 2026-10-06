@@ -107,14 +107,8 @@ class PinterestAdapter:
             items.append({"url": payload["avatar"], "kind": "avatar"})
         if match.role == "profile":
             return items[:1]
-        used_clip = False
         for slide in payload.get("slides") or []:
-            item = dict(slide)
-            if item.get("kind") == "video" and item.get("clip_url"):
-                if used_clip:
-                    item.pop("clip_url", None)
-                used_clip = True
-            items.append(item)
+            items.append(dict(slide))
         return items[:5]
 
     def parse(self, body, url, match):

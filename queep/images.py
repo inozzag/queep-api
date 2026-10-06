@@ -31,6 +31,9 @@ logger = logging.getLogger(__name__)
 _preview_cache: OrderedDict[str, bytes] = OrderedDict()
 _preview_lock = threading.Lock()
 _preview_slots = threading.BoundedSemaphore(2)
+_byte_cache: OrderedDict[str, bytes] = OrderedDict()
+_BYTE_BUDGET = 48 * 1024 * 1024
+STORED_OBJECTS = ("original", "thumbnail", "card", "motion", "loop")
 
 
 @dataclass
@@ -90,6 +93,37 @@ def prepare(data: bytes) -> PreparedImage:
         Image.DecompressionBombWarning,
     ) as error:
         raise HTTPException(415, "Não foi possível ler esta imagem. Escolha JPEG ou PNG") from error
+
+
+def recall_bytes(key: str) -> bytes | None:
+    with _preview_lock:
+        cached = _byte_cache.get(key)
+        if cached is not None:
+            _byte_cache.move_to_end(key)
+        return cached
+
+
+def remember_bytes(key: str, data: bytes) -> None:
+    """Keep small private derivatives in this process so the next gallery paint skips Storage."""
+    if not data or len(data) > 2 * 1024 * 1024:
+        return
+    with _preview_lock:
+        _byte_cache[key] = data
+        _byte_cache.move_to_end(key)
+        total = sum(len(item) for item in _byte_cache.values())
+        while total > _BYTE_BUDGET and len(_byte_cache) > 1:
+            _, dropped = _byte_cache.popitem(last=False)
+            total -= len(dropped)
+
+
+def animated_gif(data: bytes) -> bool:
+    if not data.startswith((b"GIF87a", b"GIF89a")):
+        return False
+    try:
+        with Image.open(BytesIO(data)) as image:
+            return getattr(image, "n_frames", 1) > 1
+    except (UnidentifiedImageError, OSError, ValueError):
+        return False
 
 
 def preview_edge(data: bytes) -> int:
@@ -332,18 +366,25 @@ class Images:
                 self.cleanup(uid, ref_id)  # Also handles a late writer racing deletion/expiry.
             raise
 
-    def attach_preview(self, uid, ref_id, data, preview_kind="photo"):
-        """Store a public post photo or video poster without changing the link kind."""
-        kind = preview_kind if preview_kind in ("photo", "video") else "photo"
+    def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+        """Store a public post photo, GIF, or video poster without changing the link kind."""
+        kind = preview_kind if preview_kind in ("photo", "video", "gif") else "photo"
+        motion_bytes = motion if isinstance(motion, bytes) else None
+        if motion_bytes is None or not 32 <= len(motion_bytes) <= 4 * 1024 * 1024:
+            motion_bytes = None
+        if kind == "gif" and not motion_bytes:
+            kind = "photo"
         try:
             image = self.prepare(data)
         except HTTPException:
             image = self.prepare(as_jpeg(data))
-        info = image.info.model_copy(update={"preview_kind": kind})
+        info = image.info.model_copy(update={"preview_kind": kind, "motion": bool(motion_bytes)})
         prefix = self.prefix(uid, ref_id, image.info.sha256)
-        self.reserve_preview(uid, ref_id, image)
+        self.reserve_preview(uid, ref_id, image, extra=len(motion_bytes or b""))
         for name, content, content_type in self.objects(image):
             self.put_object(f"{prefix}/{name}", content, content_type)
+        if motion_bytes:
+            self.put_object(f"{prefix}/motion", motion_bytes, "video/mp4")
         now = datetime.now(UTC)
         manifest = self.manifest(uid, ref_id)
         doc = self.repo.collection(uid).document(ref_id)
@@ -433,12 +474,12 @@ class Images:
 
         return self.repo.transact(write)
 
-    def reserve_preview(self, uid, ref_id, image):
+    def reserve_preview(self, uid, ref_id, image, extra=0):
         """Reserve every live object (including social thumbnails) before Storage writes."""
         access = policy(self.db, uid)
         manifest = self.manifest(uid, ref_id)
         prefix = self.prefix(uid, ref_id, image.info.sha256)
-        size = sum(len(data) for _, data, _ in self.objects(image))
+        size = sum(len(data) for _, data, _ in self.objects(image)) + max(0, extra)
 
         @firestore.transactional
         def reserve(tx):
@@ -465,7 +506,7 @@ class Images:
                               "settle_at": datetime.now(UTC) + timedelta(minutes=10)})
         self.repo.transact(reserve)
 
-    def read(self, uid, ref_id, thumbnail=False, index=0, role="gallery"):
+    def read(self, uid, ref_id, thumbnail=False, index=0, role="gallery", motion=False):
         reference = self.repo.get(uid, ref_id)
         if role == "author":
             info = reference.author_image
@@ -477,6 +518,10 @@ class Images:
                 raise HTTPException(404, "Imagem não encontrada")
             info = gallery[index]
         prefix = self.prefix(uid, ref_id, info.sha256)
+        if motion:
+            if role == "author" or not info.motion:
+                raise HTTPException(404, "Imagem não encontrada")
+            return self._download(f"{prefix}/motion"), "video/mp4"
         name = "thumbnail" if thumbnail else "original"
         data = self._download(f"{prefix}/{name}")
         needs_card = (
@@ -491,41 +536,61 @@ class Images:
         return data, info.content_type
 
     def _download(self, path):
+        cached = recall_bytes(path)
+        if cached is not None:
+            return cached
         try:
-            return self.bucket.blob(path).download_as_bytes(timeout=20, retry=None)
+            data = self.bucket.blob(path).download_as_bytes(timeout=20, retry=None)
         except NotFound as error:
             raise HTTPException(404, "Imagem não encontrada") from error
         except GoogleAPICallError as error:
             raise HTTPException(503, "Não foi possível carregar a imagem") from error
+        remember_bytes(path, data)
+        return data
 
     def _card(self, prefix):
-        """Build a 1440 px preview once for legacy 560 px thumbnails and keep it next to them."""
-        def build():
-            card_path = f"{prefix}/card"
-            blob = self.bucket.blob(card_path)
-            try:
-                return blob.download_as_bytes(timeout=20, retry=None)
-            except NotFound:
-                pass
-            except GoogleAPICallError:
-                logger.warning("Card preview unavailable", exc_info=True)
-                return None
-            try:
-                original = self._download(f"{prefix}/original")
-                card = jpeg_card(original)
-            except HTTPException:
-                return None
-            try:
-                blob.upload_from_string(card, content_type="image/jpeg", timeout=20)
-            except GoogleAPICallError:
-                logger.warning("Card preview was not stored", exc_info=True)
-            return card
-
+        """Serve a stored 1440 px card. A missing one is built off the request path."""
+        card_path = f"{prefix}/card"
+        cached = recall_bytes(card_path)
+        if cached is not None:
+            return cached
+        blob = self.bucket.blob(card_path)
         try:
-            return cached_preview(f"{prefix}/card", build)
-        except Exception:
-            logger.warning("Card preview failed", exc_info=True)
+            data = blob.download_as_bytes(timeout=8, retry=None)
+        except NotFound:
+            self._schedule_card(prefix)
             return None
+        except GoogleAPICallError:
+            logger.warning("Card preview unavailable", exc_info=True)
+            return None
+        remember_bytes(card_path, data)
+        return data
+
+    def _schedule_card(self, prefix):
+        if not _preview_slots.acquire(blocking=False):
+            return
+
+        def build():
+            try:
+                card_path = f"{prefix}/card"
+                if recall_bytes(card_path):
+                    return
+                try:
+                    original = self._download(f"{prefix}/original")
+                    card = jpeg_card(original)
+                except HTTPException:
+                    return
+                try:
+                    self.bucket.blob(card_path).upload_from_string(
+                        card, content_type="image/jpeg", timeout=20
+                    )
+                except GoogleAPICallError:
+                    logger.warning("Card preview was not stored", exc_info=True)
+                remember_bytes(card_path, card)
+            finally:
+                _preview_slots.release()
+
+        threading.Thread(target=build, name="queep-card", daemon=True).start()
 
     def cleanup(self, uid, ref_id, now=None):
         now = now or datetime.now(UTC)
@@ -556,7 +621,7 @@ class Images:
             return False
         try:
             for prefix in self.object_prefixes(self.repo.job(uid, ref_id).id, upload):
-                for name in ("original", "thumbnail", "card"):
+                for name in STORED_OBJECTS:
                     try:
                         self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
                     except NotFound:

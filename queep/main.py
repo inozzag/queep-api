@@ -336,19 +336,21 @@ async def upload_media(ref_id: UUID, request: Request, uid: UID, subscriptions: 
 
 
 @app.get("/v1/references/{ref_id}/media")
-def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False):
-    data, content_type = MediaFiles(database(), image_bucket()).read(uid, str(ref_id), thumbnail)
+def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False, loop: bool = False):
+    data, content_type = MediaFiles(database(), image_bucket()).read(
+        uid, str(ref_id), thumbnail, loop)
     return Response(content=data, media_type=content_type,
                     headers={"Content-Disposition": "inline"})
 
 
 @app.get("/v1/references/{ref_id}/image", responses={200: {"content": {
-    "image/jpeg": {}, "image/png": {},
+    "image/jpeg": {}, "image/png": {}, "video/mp4": {},
 }}})
 def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False,
                index: Annotated[int, Query(ge=0, le=3)] = 0,
-               role: Annotated[Literal["gallery", "author"], Query()] = "gallery"):
-    data, content_type = media.read(uid, str(ref_id), thumbnail, index, role)
+               role: Annotated[Literal["gallery", "author"], Query()] = "gallery",
+               motion: bool = False):
+    data, content_type = media.read(uid, str(ref_id), thumbnail, index, role, motion)
     return Response(content=data, media_type=content_type,
                     headers={"Content-Disposition": "inline"})
 
