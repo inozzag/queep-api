@@ -70,6 +70,18 @@ def authorized(credentials: Annotated[HTTPAuthorizationCredentials | None, Depen
         raise HTTPException(403, "Identidade não autorizada") from exc
 
 
+MISSED_POST_MEDIA = (
+    "Fotos ou o clipe deste post não puderam ser lidos. "
+    "A análise não cobre essa mídia; uma nova tentativa pode recuperá-la."
+)
+
+
+def note_missed_post_media(analysis):
+    """A swallowed photo or clip must not be published as a complete reading."""
+    limitations = list(dict.fromkeys([MISSED_POST_MEDIA, *analysis.limitations]))[:20]
+    return analysis.model_copy(update={"coverage": "partial", "limitations": limitations})
+
+
 def library_title(ref, analysis, frames):
     """Native network title wins; otherwise the AI names posts that have text or media."""
     if (ref.title or "").strip():
@@ -180,6 +192,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
             return "stale"
         poster_frames = []
         clip_frames = []
+        missed_media = False
         profile = False
         page = False
         if ref.kind == "link":
@@ -231,6 +244,8 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             except Exception:
                                 logger.warning("post_clip_skipped", extra={"uid": work["uid"]},
                                                exc_info=True)
+                                if not page:
+                                    missed_media = True
                             if clip_bytes:
                                 if evidence_clip is None:
                                     evidence_clip = clip_bytes
@@ -253,12 +268,16 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                     except Exception:
                         logger.warning("post_photo_skipped", extra={"count": len(infos)},
                                        exc_info=True)
+                        if not page:
+                            missed_media = True
                 logger.info("post_photos_attached %s/%s", len(infos), len(previews))
                 if infos:
                     ref = ref.model_copy(update={"image": infos[0], "images": infos})
             if evidence_clip and not page:
                 try:
                     clip = social_evidence(evidence_clip)
+                    if not clip.frames and not clip.audio:
+                        missed_media = True
                     clip_frames.extend(frame for _, frame in clip.frames)
                     if clip.audio:
                         speech = ai.transcribe_speech(clip.audio)
@@ -266,6 +285,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             ref = ref.model_copy(update={"transcript": speech})
                 except Exception:
                     logger.warning("post_clip_skipped", extra={"uid": work["uid"]}, exc_info=True)
+                    missed_media = True
             if not jobs.current(work):
                 return "stale"
         transcript = ref.transcript
@@ -286,16 +306,18 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
         else:
             vision = [] if profile or page else select_vision_frames(poster_frames, clip_frames)
             analysis = ai.interpret(ref, vision or data)
+            if missed_media and not profile and not page:
+                analysis = note_missed_post_media(analysis)
         title = library_title(ref, analysis, vision)
         if title:
             ref = ref.model_copy(update={"title": title})
         if not jobs.current(work):
             return "stale"
         vector = ai.embed(document(ref, analysis))
-        return "ready" if jobs.finish(work, analysis=analysis, vector=vector,
-                                       source=ref.source, transcript=transcript,
-                                       title=title, image=ref.image, images=ref.images,
-                                       author_image=ref.author_image) else "stale"
+        return "ready" if jobs.finish(
+            work, analysis=analysis, vector=vector, source=ref.source, transcript=transcript,
+            title=title, image=ref.image, images=ref.images, author_image=ref.author_image,
+            media_incomplete=bool(missed_media and not profile and not page)) else "stale"
     except (AIError, HTTPException) as error:
         code = str(error) if isinstance(error, AIError) else f"http_{error.status_code}"
         jobs.finish(work, error=code)
