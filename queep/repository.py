@@ -10,6 +10,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import require_open
+from queep.availability import retry_later
 from queep.config import Settings
 from queep.models import Capture, Edit, Interpretation, Library, MetadataEdit, Reference
 from queep.usage import inventory, policy, reserve_operation
@@ -43,14 +44,12 @@ class Repository:
         try:
             return operation(self.db.transaction())
         except (Aborted, DeadlineExceeded, ServiceUnavailable) as error:
-            raise HTTPException(503, "Serviço ocupado. Tente novamente.",
-                                headers={"Retry-After": "1"}) from error
+            raise retry_later() from error
         except ValueError as error:
             # The Firestore SDK wraps exhausted contention retries in ValueError.
             if not isinstance(error.__cause__, Aborted):
                 raise
-            raise HTTPException(503, "Serviço ocupado. Tente novamente.",
-                                headers={"Retry-After": "1"}) from error
+            raise retry_later() from error
 
     def save(self, uid: str, ref_id: str, capture: Capture, editing=False):
         access = policy(self.db, uid)

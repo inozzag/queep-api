@@ -15,6 +15,7 @@ from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import deletion_document, require_open
+from queep.availability import call_read
 from queep.config import firebase_app
 from queep.images import Images, prepare
 from queep.models import OnboardingProfile
@@ -47,7 +48,8 @@ class Accounts:
                 "can_restore": state == "scheduled" and deadline is not None and now < deadline}
 
     def get_status(self, uid, now=None):
-        return self.status(deletion_document(self.db, uid).get().to_dict(), now)
+        record = call_read(lambda: deletion_document(self.db, uid).get().to_dict())
+        return self.status(record, now)
 
     def request(self, uid, now=None, *, immediate=False, version=0, operation_id=None):
         now = now or datetime.now(UTC)
