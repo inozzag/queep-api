@@ -117,6 +117,8 @@ class Reference(BaseModel):
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)
+    # True when a social post was published without a photo or clip the source offered.
+    media_incomplete: bool = False
 
 
 class Library(BaseModel):

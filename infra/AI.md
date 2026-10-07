@@ -6,7 +6,8 @@ Captura confirma conteúdo/outbox → Cloud Tasks → `queep-worker` privado →
 vetor publicados na revisão atual. Dispatcher agendado a cada minuto recupera falhas
 de envio. Jobs usam lease de 360 s, até 3 tentativas e identificadores diferentes por
 execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição/exclusão
-invalida o processamento anterior. O botão de nova tentativa abre outra execução.
+invalida o processamento anterior. O botão de nova tentativa abre outra execução,
+também quando o post ficou pronto sem a foto ou o clipe que a fonte ofereceu.
 
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
 embeddings. Seleciona 10 candidatos e confere correspondência; revalida revisões e
@@ -36,7 +37,9 @@ São controles conservadores, não um teto de faturamento Firebase. Há também 
 de 100 buscas/conta/dia e intervalo mínimo de 1 s. Registros de custo não incluem
 conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite próprio.
 
-Imagens são reduzidas a 1536 px para interpretação. Fotos e pôsteres de vídeo
+Imagens são reduzidas a 1536 px para interpretação. Até quatro imagens seguem juntas
+para o modelo; amostras do clipe ocupam vagas desse teto e não ficam depois dos
+pôsteres. Fotos e pôsteres de vídeo
 anexados a um post social seguem o mesmo caminho, mesmo quando o texto do post
 não pôde ser lido: entram na interpretação, no documento vetorial e na conferência
 da busca. O arquivo de vídeo do post no X não é baixado. Notas

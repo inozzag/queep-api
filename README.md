@@ -36,7 +36,7 @@ Spaces pessoais, captura opcional, filtro e busca: [contrato e persistência](in
 - `PATCH /v1/references/{UUID}`: exige `revision` e `mutation_id`; conflitos retornam 409.
 - `DELETE /v1/references/{UUID}?revision=N`: exclui conteúdo e trabalho pendente; mantém só tombstone contra reenvios tardios.
 - `POST /v1/search`: `{ "query": "interfaces claras de CRM" }`; até 10 candidatos, conferidos por IA, sem inventar resultados fora do acervo.
-- `POST /v1/references/{UUID}/retry`: `{ "revision": N }`; nova tentativa para análise em erro.
+- `POST /v1/references/{UUID}/retry`: `{ "revision": N }`; nova tentativa para análise em erro ou para um post `ready` com `media_incomplete` (foto ou clipe oferecido pela fonte não entrou na análise). Análise pronta e completa não é reenfileirada.
 - `GET /v1/account`: estado, versão e prazo de exclusão da conta autenticada.
 - `POST /v1/account/deletion`: autenticação recente, operação/versão; agenda exclusão em 30 dias ou inicia imediatamente. `POST /v1/account/deletion/cancel` recupera antes do prazo. [Contrato, ativação e limites](infra/ACCOUNTS.md).
 

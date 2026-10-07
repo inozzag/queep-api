@@ -139,7 +139,7 @@ class Jobs:
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
     def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None,
-               title=None, image=None, images=None, author_image=None):
+               title=None, image=None, images=None, author_image=None, media_incomplete=False):
         doc = self.repo.jobs().document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -170,7 +170,8 @@ class Jobs:
                            "transcript": transcript,
                            "embedding": Vector(vector), "embedding_space": SPACE,
                            "analysis_model": INTERPRETER["id"],
-                           "analysis_version": ANALYSIS_VERSION, "updated_at": now}
+                           "analysis_version": ANALYSIS_VERSION, "updated_at": now,
+                           "media_incomplete": bool(media_incomplete)}
                 if title and not (record.get("title") or "").strip():
                     payload["title"] = title
                 if image and not record.get("image"):
@@ -203,12 +204,14 @@ class Jobs:
                 raise HTTPException(404, "Referência não encontrada")
             if old["revision"] != revision:
                 raise HTTPException(409, "A referência mudou. Atualize antes de tentar")
-            if old["status"] != "error":
+            missed = old["status"] == "ready" and bool(old.get("media_incomplete"))
+            if old["status"] != "error" and not missed:
                 return Reference.model_validate(old)
             now = datetime.now(UTC)
             reserve_operation(self.db, uid, tx, now=now, access=access,
                               media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
-            tx.update(doc, {"status": "queued", "updated_at": now})
+            tx.update(doc, {"status": "queued", "updated_at": now, "media_incomplete": False})
             tx.set(job, new_job(uid, ref_id, revision, now) | {"plan": access.plan})
-            return Reference.model_validate({**old, "status": "queued", "updated_at": now})
+            return Reference.model_validate({
+                **old, "status": "queued", "updated_at": now, "media_incomplete": False})
         return self.repo.transact(write)
