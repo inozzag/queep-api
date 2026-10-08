@@ -9,8 +9,8 @@ from queep.textnorm import SHORT_TOKENS, STOPWORDS, fold, tokenize
 RESULT_LIMIT = 60
 # Always keep this many ready items when the library has them, even past the gap.
 MIN_RESULTS = 12
-# Contradiction checker only. The tail is returned unverified.
-HEAD_LIMIT = 8
+# Contradiction checker only. Six items keep the call inside the 20s budget.
+HEAD_LIMIT = 6
 # Keep a hit when its score is at least (1 - gap) times the best score.
 # Used for queries that are neither a short theme nor a color constraint.
 TAIL_RELATIVE_GAP = 0.55

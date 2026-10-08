@@ -16,8 +16,8 @@ mostrar a lista maior). Consulta curta sem cor (1–2 palavras: interface, web d
 Sem apoio lexical no item — o "log in" repetido no chrome da página não conta — a lista fica curta (8). Consulta com cor fica
 só nos itens que citam essa cor em `colors`/`brand` ou, em itens antigos, na
 aparência e no texto da leitura; se ninguém cita, voltam 5 quase-acertos, não a
-biblioteca inteira. A conferência roda só na cabeça (8 itens, ~19,5 KB, timeout
-de 8 s) e só tira contradição explícita; o restante volta sem passar pelo modelo.
+biblioteca inteira. A conferência roda só na cabeça (6 itens, até 8 KB, timeout
+de 20 s) e só tira contradição explícita; o restante volta sem passar pelo modelo.
 Se a conferência falha ou estoura o tempo, a lista ordenada volta mesmo assim, a
 busca mensal não é debitada e o tempo esgotado não segura a reserva de US$ 0,01. Revalida revisões e exclusões antes de
 responder. Consultas usam POST para não expor o texto em URLs.

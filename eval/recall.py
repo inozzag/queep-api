@@ -16,7 +16,7 @@ Run where ADC can read ``queep-dev-hstlx`` (this repo has no credentials):
     uv run --env-file .env.evaluation python eval/recall.py --uid UID
 
 About US$0.0002 per query for the embedding. ``--checker`` adds one verifier
-call per query and gives up after 8 seconds; a timeout keeps the ranked list.
+call per query and gives up after 20 seconds; a timeout keeps the ranked list.
 Empty labels print the count only. Color queries with no evidence are capped
 at a short near-miss list. Short themes (1–2 words, no color) keep the fused
 head, then only cosine neighbors above a floor, capped so a flat shelf is not

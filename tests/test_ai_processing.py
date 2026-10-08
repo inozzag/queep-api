@@ -8,7 +8,16 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, CHECKER_TIMEOUT, SPACE, AIError, document, generated_title, headline_title
+from queep.ai import (
+    AI,
+    CHECKER_BUDGET,
+    CHECKER_TIMEOUT,
+    SPACE,
+    AIError,
+    document,
+    generated_title,
+    headline_title,
+)
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
@@ -259,7 +268,7 @@ def test_checker_timeout_releases_the_budget_placeholder(library):
     ai = AI("unused", budget, SimpleNamespace(post=post))
     with pytest.raises(AIError, match="provider_timeout"):
         ai.verify("interface", [ref])
-    assert seen["timeout"] == CHECKER_TIMEOUT
+    assert seen["timeout"] == CHECKER_TIMEOUT == 20
     assert settled[0][1] == 0.0
 
 
@@ -944,7 +953,9 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
         "content": '{"requested_kind":"any","ids":[]}'}}]})
     assert ai.verify("Encontre uma referência", refs) == []
-    assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
+    assert len(calls[0]["messages"][1]["content"].encode()) <= CHECKER_BUDGET
+    assert calls[0]["max_tokens"] == 160
+    assert len(calls[0]["messages"][0]["content"]) < 1200
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
 
 
