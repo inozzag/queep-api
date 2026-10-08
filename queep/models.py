@@ -119,6 +119,8 @@ class Reference(BaseModel):
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)
+    # True when a link was published without the media or page the source offered.
+    media_incomplete: bool = False
 
 
 class Library(BaseModel):
@@ -152,6 +154,8 @@ class BatchArchive(BaseModel):
 class RetryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
+    # fetch is the button default. analysis uses the same acceptance set.
+    scope: Literal["fetch", "analysis"] = "fetch"
 
 
 _BR_AREA_CODES = {
