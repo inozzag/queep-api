@@ -214,6 +214,20 @@ def test_worker_routes_are_private_and_not_in_public_api():
     assert not any(path.startswith("/tasks") for path in public_app.openapi()["paths"])
 
 
+def test_checked_in_openapi_matches_the_app():
+    import json
+    from pathlib import Path
+
+    saved = json.loads(Path("contracts/openapi.json").read_text())
+    assert saved == public_app.openapi()
+    image = saved["components"]["schemas"]["ImageInfo"]["properties"]
+    assert image["preview_kind"]["enum"] == ["photo", "video", "gif"]
+    assert image["motion"]["default"] is False
+    retry = saved["components"]["schemas"]["RetryAnalysis"]["properties"]
+    assert retry["scope"]["default"] == "fetch"
+    assert "media_incomplete" in saved["components"]["schemas"]["Reference"]["properties"]
+
+
 def fake_client(value):
     calls, settled = [], []
     def respond(request):
