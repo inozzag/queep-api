@@ -8,7 +8,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, SPACE, AIError, document, generated_title, headline_title
+from queep.ai import AI, CHECKER_TIMEOUT, SPACE, AIError, document, generated_title, headline_title
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
@@ -244,6 +244,35 @@ def test_partial_link_does_not_invent_or_fetch_site(library):
     result = ai.interpret(link)
     assert result.coverage == "partial" and result.summary == "Ferramenta X"
     assert result.limitations and not result.usefulness and not calls
+
+
+def test_checker_timeout_releases_the_budget_placeholder(library):
+    *_, ref = library
+    seen = {}
+
+    def post(_path, json, timeout):
+        seen["timeout"] = timeout
+        raise httpx.ReadTimeout("slow checker")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_timeout"):
+        ai.verify("interface", [ref])
+    assert seen["timeout"] == CHECKER_TIMEOUT
+    assert settled[0][1] == 0.0
+
+
+def test_provider_error_without_usage_keeps_the_placeholder():
+    def post(_path, json, timeout):
+        raise httpx.ConnectError("down")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_unavailable"):
+        ai.embed("interface")
+    assert settled[0][1] is None
 
 
 def test_search_rejects_ids_outside_candidates(library):

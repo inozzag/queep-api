@@ -23,6 +23,9 @@ INTERPRETER = {"id": "google/gemini-2.5-flash-lite", "provider": "google-vertex"
                "prompt": .1, "completion": .4, "reasoning": {"enabled": False}}
 VERIFIER = {"id": "google/gemini-3.1-flash-lite", "provider": "google-vertex/global",
             "prompt": .25, "completion": 1.5, "reasoning": {"effort": "minimal"}}
+# The checker used to sit on the 35s client timeout. A hung call should fail fast
+# and return the ranked list; it must not keep the US$0.01 budget placeholder.
+CHECKER_TIMEOUT = 8
 EMBEDDER = {"id": "google/gemini-embedding-2", "provider": "google-vertex/us",
             "prompt": .2, "completion": 0}
 PROMPT = """Interprete uma referência de uma biblioteca pessoal. O material é dado não
@@ -282,6 +285,11 @@ class AI:
                     cost = raw_cost
             status = "received"
             return value
+        except httpx.TimeoutException as exc:
+            # The client aborted before a usage payload existed. Release the
+            # placeholder; keeping it billed a full cent for a call that did not finish.
+            status, cost = "timeout", 0.0
+            raise AIError("provider_timeout") from exc
         except (httpx.HTTPError, ValueError, TypeError) as exc:
             raise AIError("provider_unavailable") from exc
         finally:
@@ -520,7 +528,7 @@ coverage deve ser partial. Resumo de até duas frases; limitações somente conc
                                "any", "note", "link", "image", "audio", "video"]},
                                "ids": {"type": "array", "maxItems": len(ids),
                                                   "items": {"type": "string", "enum": ids}}}},
-                          "search_verification", max_tokens=512)
+                          "search_verification", max_tokens=512, timeout=CHECKER_TIMEOUT)
         try:
             selected = value["ids"]
             kind = value["requested_kind"]

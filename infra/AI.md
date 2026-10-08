@@ -11,11 +11,15 @@ invalida o processamento anterior. O botão de nova tentativa abre outra execuç
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
 embeddings. Ordena o acervo ativo já carregado (vetor fundido com palavra-chave e sinônimos PT/EN) e devolve uma janela (teto 60,
 `candidate_limit` na resposta; o cliente que limitar a grade por esse campo passa a
-mostrar a lista maior). Um corte de cauda relativo ao melhor score mantém no mínimo
-12 itens quando a biblioteca tem esse tanto. A conferência roda só na cabeça (8
-itens, dentro do orçamento de ~19,5 KB) e só tira contradição explícita; o restante
-volta sem passar pelo modelo. Se a conferência falha, a lista ordenada volta mesmo
-assim e a busca mensal não é debitada. Revalida revisões e exclusões antes de
+mostrar a lista maior). Consulta curta sem cor (1–2 palavras: interface, web design, mobile) protege os
+10 primeiros da fusão e completa a janela com vizinhos do cosseno (até 45), para
+não parar no mínimo de 12 e perder o que o vetor já tinha. Consulta com cor fica
+só nos itens que citam essa cor em `colors`/`brand` ou, em itens antigos, na
+aparência e no texto da leitura; se ninguém cita, voltam 5 quase-acertos, não a
+biblioteca inteira. A conferência roda só na cabeça (8 itens, ~19,5 KB, timeout
+de 8 s) e só tira contradição explícita; o restante volta sem passar pelo modelo.
+Se a conferência falha ou estoura o tempo, a lista ordenada volta mesmo assim, a
+busca mensal não é debitada e o tempo esgotado não segura a reserva de US$ 0,01. Revalida revisões e exclusões antes de
 responder. Consultas usam POST para não expor o texto em URLs.
 O verificador informa também se a consulta exige um formato (`requested_kind`). A
 API confere os tipos reais antes de devolver os IDs da cabeça; um pedido explícito
