@@ -413,4 +413,5 @@ def find_references(capture: Search, uid: PaidUID, repo: Repo, ai: Annotated[AI,
     except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:
         raise HTTPException(
             503, "A busca está temporariamente indisponível. Tente novamente.",
+            headers={"Retry-After": "1"},
         ) from exc
