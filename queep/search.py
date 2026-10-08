@@ -1,3 +1,4 @@
+import os
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -5,6 +6,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.ai import SPACE, AIError
 from queep.cost_context import attribution
+from queep.lexicon import expand_terms
 from queep.models import Reference, SearchResults
 from queep.ranking import HEAD_LIMIT, RESULT_LIMIT, contradicting_ids, order_ready, vector_order
 from queep.usage import policy
@@ -43,7 +45,7 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     except AIError:
         _release(ai, uid, token)
         raise
-    ranked = order_ready(records, vector, query)
+    ranked = order_ready(records, vector, query, _expansions(ai, query))
     # Resolve current revisions both before the checker and before returning.
     candidates = current_references(
         repo, uid, [Reference.model_validate(item) for item in ranked], space_id)
@@ -65,6 +67,29 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     else:
         _commit(ai, uid, token)
     return SearchResults(items=visible, has_pending=has_pending, candidate_limit=CANDIDATE_LIMIT)
+
+
+def _expansions(ai, query):
+    """Curated synonyms boost rank. An optional rewrite never removes the curated list."""
+    terms = expand_terms(query)
+    flag = os.getenv("QUEEP_QUERY_REWRITE", "").lower()
+    if flag not in {"1", "true", "yes"}:
+        return terms
+    rewrite = getattr(ai, "rewrite_query", None)
+    if rewrite is None:
+        return terms
+    try:
+        extra = rewrite(query)
+    except Exception:
+        return terms
+    if not isinstance(extra, list):
+        return terms
+    merged = list(terms)
+    for item in extra:
+        text = str(item).strip()
+        if text and text not in merged:
+            merged.append(text)
+    return merged
 
 
 def _release(ai, uid, token):

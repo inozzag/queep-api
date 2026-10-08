@@ -8,6 +8,7 @@ from google.cloud.firestore_v1.vector import Vector
 
 from queep.ai import SPACE
 from queep.config import database
+from queep.lexicon import expand_terms
 from queep.models import Interpretation
 from queep.ranking import HEAD_LIMIT, MIN_RESULTS, bm25_ranks, contradicting_ids, order_ready
 from queep.repository import Repository
@@ -177,3 +178,52 @@ def test_short_tokens_accents_and_plurals_match():
     assert bm25_ranks(rows, "web")[0] == "web"
     assert "sites" in bm25_ranks(rows, "website")
     assert bm25_ranks(rows, "roxó") == ["purple"]
+
+
+def test_curated_expansion_maps_design_vocabulary_both_ways():
+    web = expand_terms("web design")
+    assert "website" in web and "landing page" in web and "página" in web
+    assert "purple" in expand_terms("roxo") and "roxo" in expand_terms("purple")
+    assert "iphone" in expand_terms("mobile")
+    assert "sign in" in expand_terms("login")
+    assert "web design" not in web
+
+
+def test_expansion_boosts_rank_without_dropping_other_items():
+    dashboard = _record("dashboard", _weak(), analysis={"topics": ["dashboard"]})
+    closer = _record("closer", QUERY, analysis={"summary": "Paisagem"})
+    ordered = order_ready(
+        [closer, dashboard], QUERY, "interface", expand_terms("interface"))
+    assert [item["id"] for item in ordered] == ["dashboard", "closer"]
+
+
+def test_rewrite_flag_off_is_the_default_and_failure_does_not_break_search(monkeypatch):
+    repo, uid = Repository(database()), uuid4().hex
+    put_ready(repo, uid, "only", QUERY, summary="Interface de CRM")
+    calls = []
+
+    def rewrite(query):
+        calls.append(query)
+        raise RuntimeError("rewrite down")
+
+    ai = SimpleNamespace(budget=SimpleNamespace(rate_limit=lambda _: None),
+                         embed=lambda *_args, **_kwargs: QUERY,
+                         verify=lambda _query, refs: [ref.id for ref in refs],
+                         rewrite_query=rewrite)
+    assert search(repo, ai, uid, "interface").items[0].id == "only"
+    assert calls == []
+    monkeypatch.setenv("QUEEP_QUERY_REWRITE", "true")
+    assert search(repo, ai, uid, "interface").items[0].id == "only"
+    assert calls == ["interface"]
+
+
+def test_rewrite_query_keeps_terms_and_swallows_a_bad_reply():
+    from tests.test_ai_processing import fake_client
+
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": '{"terms":["tela","dashboard"]}'}}]})
+    assert ai.rewrite_query("interface") == ["tela", "dashboard"]
+    assert calls[0]["max_tokens"] == 120
+    broken, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": "not-json"}}]})
+    assert broken.rewrite_query("interface") == []
