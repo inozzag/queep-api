@@ -14,6 +14,7 @@ from queep.ranking import (
     FUSED_PROTECT,
     HEAD_LIMIT,
     MIN_RESULTS,
+    SPECIFIC_MISS_LIMIT,
     bm25_ranks,
     contradicting_ids,
     order_ready,
@@ -117,11 +118,10 @@ def test_tail_cut_keeps_the_minimum_when_scores_fall_off():
         return [ref.id for ref in refs]
 
     result = _search(repo, uid, "roxo", verify)
-    assert [item.id for item in result.items][0] == "best"
-    assert len(result.items) == MIN_RESULTS
+    assert [item.id for item in result.items] == ["best"]
 
 
-def test_wrong_color_drops_from_the_head_and_the_tail_stays():
+def test_wrong_color_drops_from_the_head_and_the_tail():
     repo, uid = Repository(database()), uuid4().hex
     put_ready(repo, uid, "purple", QUERY, summary="Landing roxa", appearance=["fundo roxo"])
     put_ready(repo, uid, "green", _vector(0.02), summary="Landing", appearance=["botão verde"])
@@ -133,9 +133,7 @@ def test_wrong_color_drops_from_the_head_and_the_tail_stays():
         return [ref.id for ref in refs]
 
     result = _search(repo, uid, "web design roxo", verify)
-    ids = [item.id for item in result.items]
-    assert "purple" in ids and "green" not in ids
-    assert any(item.startswith("tail-") for item in ids)
+    assert [item.id for item in result.items] == ["purple"]
 
 
 def test_only_videos_drops_a_note_and_keeps_youtube():
@@ -180,6 +178,36 @@ def _record(identifier, vector, **fields):
     if source is not None:
         record["source"] = source
     return record
+
+
+def test_color_query_keeps_v8_colors_and_v7_appearance_only():
+    v8 = _record("v8", _weak(), analysis={"summary": "Página", "colors": ["roxo / purple"]})
+    v7 = _record("v7", _vector(0.05), analysis={
+        "summary": "Landing", "appearance": ["fundo roxo"]})
+    brand = _record("brand", _vector(0.08), analysis={"summary": "App", "brand": "Azul"})
+    caption = _record("caption", QUERY, source={"text": "a green paywall"}, analysis={
+        "summary": "Outra página"})
+    fillers = [
+        _record(f"logo-{index:02d}", _vector(0.2 + index / 100), analysis={"summary": "Logo"})
+        for index in range(6)
+    ]
+    purple = [item["id"] for item in order_ready(
+        [caption, v8, v7, brand, *fillers], QUERY, "web design roxo")]
+    assert set(purple) == {"v8", "v7"}
+    blue = [item["id"] for item in order_ready(
+        [caption, v8, v7, brand, *fillers], QUERY, "carro app logo azul")]
+    assert blue == ["brand"]
+
+
+def test_unmatched_color_returns_a_short_near_miss_list():
+    rows = [
+        _record(f"logo-{index:02d}", _vector(index / 100), analysis={
+            "summary": "Logo de uma marca", "ui_types": ["logo"]})
+        for index in range(20)
+    ]
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "logos verdes")]
+    assert ordered == [f"logo-{index:02d}" for index in range(SPECIFIC_MISS_LIMIT)]
+    assert len(ordered) < MIN_RESULTS
 
 
 def test_appearance_color_outranks_a_closer_vector():

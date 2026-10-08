@@ -21,6 +21,13 @@ BROAD_TOKEN_LIMIT = 2
 FUSED_PROTECT = 10
 BROAD_COSINE_KEEP = 45
 BROAD_GAP = 0.85
+# Color queries keep only rows with the color in v8 fields or, on older items,
+# in appearance and the other write-up fields. No such row: a short near-miss list.
+SPECIFIC_MISS_LIMIT = 5
+_EVIDENCE_FIELDS = (
+    "colors", "brand", "appearance", "summary", "headline", "title",
+    "topics", "entities", "on_screen_text", "text", "ui_types",
+)
 RRF_K = 60
 VECTOR_WEIGHT = 1.0
 KEYWORD_WEIGHT = 1.25
@@ -124,6 +131,26 @@ def content_words(query):
 def is_broad_query(query):
     """A short theme with no color. 'web design roxo' is not broad."""
     return not _families_in(query) and 0 < len(content_words(query)) <= BROAD_TOKEN_LIMIT
+
+
+def _attribute_blob(record):
+    """Color evidence. v8 colors/brand win; v7 items still match via appearance."""
+    fields = field_text(record)
+    return " ".join(fields[name] for name in _EVIDENCE_FIELDS if fields.get(name))
+
+
+def evidences_colors(record, families):
+    if not families:
+        return True
+    return not families.isdisjoint(_families_in(_attribute_blob(record)))
+
+
+def _specific_window(scored, families):
+    """Drop near-misses that never mention the asked color. Otherwise stay short."""
+    matched = [item for item in scored if evidences_colors(item[2], families)]
+    if matched:
+        return [item[2] for item in matched[:RESULT_LIMIT]]
+    return [item[2] for item in scored[:SPECIFIC_MISS_LIMIT]]
 
 
 def _broad_window(scored, cosine_rows):
@@ -277,6 +304,9 @@ def fuse_order(records, vector, query, expansions=()):
     scored = [(fused.get(identifier, 0.0), identifier, by_id[identifier])
               for identifier in vector_ids]
     scored.sort(key=lambda item: (-item[0], item[1]))
+    families = _families_in(query)
+    if families:
+        return _specific_window(scored, families)
     if is_broad_query(query):
         return _broad_window(scored, vectors)
     return [item[2] for item in cut_tail(scored)]
