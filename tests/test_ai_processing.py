@@ -919,6 +919,30 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
 
 
+def test_embedded_text_and_checker_keep_v8_fields(library):
+    *_, ref = library
+    analysis = Interpretation(
+        summary="Landing com hero roxo", coverage="partial", headline="Hero roxo de produto",
+        appearance=["fundo roxo"], ui_types=["landing page", "hero"],
+        colors=["roxo / purple"], brand="Queep", on_screen_text=["Start free"],
+        hook="Uma abertura curta", style="flat")
+    source = source_fixture().model_copy(update={"text": "x" * 4000})
+    current = ref.model_copy(update={"analysis": analysis, "source": source, "text": "nota"})
+    embedded = document(current, analysis)
+    assert "roxo / purple" in embedded and "landing page" in embedded
+    assert "Start free" in embedded and "fundo roxo" in embedded
+    assert embedded.index("Cores") < embedded.index("Página")
+    assert len(embedded.encode()) <= 6800
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
+    assert ai.verify("roxo", [current]) == [current.id]
+    candidate = json.loads(calls[0]["messages"][1]["content"])["candidates"][0]
+    assert candidate["colors"] == ["roxo / purple"]
+    assert candidate["ui_types"] == ["landing page", "hero"]
+    assert candidate["on_screen_text"] == ["Start free"]
+    assert candidate["brand"] == "Queep"
+
+
 def test_process_stores_site_preview_without_vision_frames(library, monkeypatch):
     from tests.test_images import picture
 
@@ -963,7 +987,7 @@ def test_process_stores_site_preview_without_vision_frames(library, monkeypatch)
     assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
     stored = repo.get(uid, ref.id)
     assert seen[:2] == ["author", "gallery"]
-    assert seen[2] == ("interpret", None)
+    assert seen[2] == ("interpret", [preview])
     assert stored.author_image.sha256 == "b" * 64
     assert stored.images[0].sha256 == "a" * 64
     assert stored.source.title == "Cursor"

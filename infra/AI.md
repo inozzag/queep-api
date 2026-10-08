@@ -46,11 +46,13 @@ conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite 
 Imagens são reduzidas a 1536 px para interpretação. Fotos e pôsteres de vídeo
 anexados a um post social seguem o mesmo caminho, mesmo quando o texto do post
 não pôde ser lido: entram na interpretação, no documento vetorial e na conferência
-da busca. O arquivo de vídeo do post no X não é baixado. Notas
-longas recebem análise parcial; o documento vetorial usa até 3.500 bytes de texto
-e a análise. A conferência usa trechos de até 600 bytes por nota. Links públicos
-recebem extração de texto, com cobertura parcial e limites descritos em
-[SOURCES.md](SOURCES.md).
+da busca. O arquivo de vídeo do post no X não é baixado. Sites enviam a imagem
+de preview para a mesma interpretação. A versão `queep-interpretation-v8` acrescenta
+`ui_types`, `colors`, `brand`, `on_screen_text` e, em vídeo, `hook`, `style` e
+`transcript_summary`. O texto do vetor (até 6.800 bytes) escreve esses campos,
+a aparência e a nota antes do texto da página e da transcrição. A conferência da
+cabeça recebe os mesmos campos. Links públicos recebem extração de texto, com
+cobertura parcial e limites descritos em [SOURCES.md](SOURCES.md).
 Áudio/vídeo de até cinco minutos usam transcrição e amostragem visual; limites em
 [MEDIA.md](MEDIA.md). Busca exaustiva, filtro textual complementar e localização de
 trechos longos permanecem fora desta entrega.

@@ -171,6 +171,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
         if not jobs.current(work):
             return "stale"
         frames = []
+        page_preview = None
         profile = False
         page = False
         if ref.kind == "link":
@@ -239,7 +240,10 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             info = images.attach_preview(
                                 work["uid"], ref.id, photo, preview_kind=kind)
                         infos.append(info)
-                        if not page:
+                        if page:
+                            if page_preview is None and kind == "photo":
+                                page_preview = photo
+                        else:
                             frames.append(photo)
                     except Exception:
                         logger.warning("post_photo_skipped", extra={"count": len(infos)},
@@ -274,7 +278,10 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 limitations=["O perfil não tem bio pública para analisar."],
             )
         else:
-            analysis = ai.interpret(ref, None if profile or page else (frames or data))
+            vision = None if profile else (frames or data)
+            if page and page_preview and not profile:
+                vision = [page_preview]
+            analysis = ai.interpret(ref, vision)
         title = library_title(ref, analysis, frames)
         if title:
             ref = ref.model_copy(update={"title": title})

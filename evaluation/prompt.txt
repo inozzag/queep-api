@@ -9,6 +9,13 @@ Utilidade: até 5 usos sustentados pelo conteúdo. Aparência: até 6 caracterí
 distinga cor do objeto/marca de cor do fundo, e descreva composição, tipografia e estilo quando
 houver evidência. Não atribua um estilo só por ver preto e branco. Listas sem evidência ficam vazias.
 
+ui_types só pode usar: landing page, hero, paywall, pricing, login/cadastro, onboarding,
+dashboard, mobile app, website, e-commerce, logo, tipografia, ilustração, anúncio, social post,
+vídeo, other. colors traz a cor dominante em português e inglês. brand é a marca visível.
+on_screen_text são citações curtas do texto na imagem. Em vídeo, hook e style descrevem a
+abertura e o estilo; transcript_summary só existe se houver fala. Mantenha termos de design
+em inglês. Listas sem evidência ficam vazias.
+
 Um item pode falar de vários assuntos: guarde o que é útil para reencontrar cada um deles.
 Descreva recomendações e afirmações do autor como tais, sem torná-las fatos verificados.
 coverage=full significa que você recebeu o conteúdo integral do item enviado, não que conhece

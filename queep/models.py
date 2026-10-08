@@ -43,6 +43,13 @@ class MetadataEdit(BaseModel):
     mutation_id: UUID
 
 
+UI_TYPES = (
+    "landing page", "hero", "paywall", "pricing", "login/cadastro", "onboarding",
+    "dashboard", "mobile app", "website", "e-commerce", "logo", "tipografia",
+    "ilustração", "anúncio", "social post", "vídeo", "other",
+)
+
+
 class Interpretation(BaseModel):
     summary: str = Field(max_length=4000)
     headline: str = Field(default="", max_length=80)
@@ -50,10 +57,18 @@ class Interpretation(BaseModel):
     entities: list[str] = Field(default_factory=list, max_length=30)
     usefulness: list[str] = Field(default_factory=list, max_length=20)
     appearance: list[str] = Field(default_factory=list, max_length=20)
+    ui_types: list[str] = Field(default_factory=list, max_length=8)
+    colors: list[str] = Field(default_factory=list, max_length=8)
+    brand: str = Field(default="", max_length=80)
+    on_screen_text: list[str] = Field(default_factory=list, max_length=8)
+    hook: str = Field(default="", max_length=240)
+    style: str = Field(default="", max_length=240)
+    transcript_summary: str = Field(default="", max_length=500)
     coverage: Literal["full", "partial"]
     limitations: list[str] = Field(default_factory=list, max_length=20)
 
-    @field_validator("topics", "entities", "usefulness", "appearance", "limitations")
+    @field_validator("topics", "entities", "usefulness", "appearance", "limitations",
+                     "ui_types", "colors", "on_screen_text")
     @classmethod
     def bounded_entries(cls, value):
         if any(len(entry) > 500 for entry in value):

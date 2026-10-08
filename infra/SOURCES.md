@@ -20,9 +20,10 @@ usuário são preservados. Editar descarta a extração anterior; excluir remove
 - Até 12.000 bytes de texto armazenados; até 8.000 chegam à interpretação. Texto,
   descrição visual das fotos anexadas e resumo entram no vetor; a conferência usa
   resumo, trecho relacionado à consulta e a descrição das imagens do post.
-- Cobertura sempre parcial: só texto acessível. Sites genéricos não baixam imagens
-  da página, vídeo ou áudio; posts sociais analisam as fotos, GIFs e pôsteres
-  públicos, mais a fala dos 15 s iniciais do primeiro vídeo. O mp4 não fica no app.
+- Cobertura sempre parcial: texto acessível, hero e CTA. Sites genéricos enviam a
+  imagem de preview (og:image) para a análise visual; áudio e vídeo da página não
+  são baixados. Posts sociais analisam as fotos, GIFs e pôsteres públicos, mais a
+  fala dos 15 s iniciais do primeiro vídeo. O mp4 não fica no app.
 - Login, bloqueios, JavaScript obrigatório, formatos não suportados e falhas de acesso
   preservam o link/contexto; ficam pesquisáveis por esses dados, sem inventar o conteúdo.
 - Referências antigas são relidas quando editadas e salvas. Não há recaptura automática,

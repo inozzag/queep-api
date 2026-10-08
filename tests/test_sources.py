@@ -253,6 +253,21 @@ def test_github_readme_excludes_navigation_scripts_and_hidden_text():
     assert result.fetched_at <= datetime.now(UTC)
 
 
+def test_hero_and_cta_survive_while_login_chrome_is_dropped():
+    page = """<html><title>Studio</title><body>
+    <header><nav>Log in Sign up</nav><h1>Design systems for product teams</h1>
+    <a class="button">Start free trial</a></header>
+    <main><p>Body copy about layout, type and a long enough product description
+    for the page reader to keep this website instead of treating it as empty.</p></main>
+    <footer>Privacy policy and another login link</footer>
+    <button>Log in</button></body></html>"""
+    result = sources.extract(page.encode(), {"content-type": "text/html"}, "https://example.com")
+    assert "Design systems for product teams" in result.text
+    assert "Start free trial" in result.text
+    assert "layout, type" in result.text
+    assert "Log in" not in result.text and "Privacy" not in result.text
+
+
 def test_long_utf8_page_is_bounded_and_labelled():
     result = sources.extract(
         ("conteúdo " * 10000).encode(),
