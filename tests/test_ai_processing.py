@@ -902,6 +902,45 @@ def test_first_video_clip_speech_reaches_interpreter(library, monkeypatch):
     assert repo.get(uid, ref.id).transcript == "fala do autor"
 
 
+def test_public_clip_is_stored_as_muted_motion(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    poster = picture("blue")
+    loop = b"muted-loop" + b"\x00" * 64
+    stored_motion = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            stored_motion.append(motion)
+            return ImageInfo(
+                sha256="v" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind, motion=bool(motion),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: poster)
+    monkeypatch.setattr("queep.worker.read_social_clip", lambda _url: b"mp4-bytes")
+    monkeypatch.setattr("queep.worker.preview_loop", lambda _data: loop)
+    monkeypatch.setattr("queep.worker.social_evidence", lambda _data: SimpleNamespace(
+        audio=None, frames=[]))
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [{
+            "url": "https://pbs.twimg.com/ext_tw_video_thumb/poster.jpg",
+            "kind": "video",
+            "clip_url": "https://video.twimg.com/amplify_video/clip.mp4",
+        }]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert stored_motion == [loop]
+    assert repo.get(uid, ref.id).images[0].motion is True
+
+
 @pytest.mark.parametrize("kind", ["link", "image"])
 def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     *_, ref = library

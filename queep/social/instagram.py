@@ -70,6 +70,38 @@ def profile_handle(url):
     return handle
 
 
+def profile_pic_from_html(body):
+    """Public profile photo embedded in the profile page."""
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else body
+    match = re.search(r'profile_pic_url":"((?:\\.|[^"\\])*)"', text)
+    if not match:
+        return None
+    try:
+        url = json.loads('"' + match.group(1) + '"')
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(url, str) or not url.startswith("https://"):
+        return None
+    return url
+
+
+async def profile_avatar_url(handle):
+    if not isinstance(handle, str) or not re.fullmatch(r"[A-Za-z0-9._]{1,30}", handle):
+        return None
+    if handle.lower() in RESERVED:
+        return None
+    from queep.sources import SourceError, checked_url, fetch_resolved_body, public_asset_url
+
+    try:
+        body, _, final = await fetch_resolved_body(
+            checked_url(f"https://www.instagram.com/{handle}/")
+        )
+    except SourceError:
+        return None
+    raw = profile_pic_from_html(body)
+    return public_asset_url(raw, final) if raw else None
+
+
 class InstagramAdapter:
     name = "instagram"
 

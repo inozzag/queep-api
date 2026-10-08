@@ -50,6 +50,8 @@ class Interpretation(BaseModel):
     entities: list[str] = Field(default_factory=list, max_length=30)
     usefulness: list[str] = Field(default_factory=list, max_length=20)
     appearance: list[str] = Field(default_factory=list, max_length=20)
+    # Optional so queep-interpretation-v8 can omit it until that prompt asks for it.
+    portrait: str = Field(default="", max_length=500)
     coverage: Literal["full", "partial"]
     limitations: list[str] = Field(default_factory=list, max_length=20)
 

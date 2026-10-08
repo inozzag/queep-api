@@ -225,6 +225,8 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             if clip_bytes:
                                 if evidence_clip is None:
                                     evidence_clip = clip_bytes
+                                # Public clip bytes become ImageInfo.motion (muted loop).
+                                # 14ef461's separate /clip object is not stored.
                                 motion = preview_loop(clip_bytes)
                         elif animated_gif(photo):
                             kind = "gif"

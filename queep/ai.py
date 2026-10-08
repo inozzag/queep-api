@@ -149,6 +149,13 @@ def encode_vision_frame(data):
         return None
 
 
+def interpretation_schema():
+    """Strict interpretation schema. `portrait` stays optional for the v8 prompt."""
+    schema = Output.model_json_schema()
+    schema["required"] = [name for name in schema["properties"] if name != "portrait"]
+    return schema
+
+
 def normalize_output(value, schema):
     """Keep a usable interpretation when the model adds keys or overfills lists."""
     if not isinstance(value, dict):
@@ -166,6 +173,8 @@ def normalize_output(value, schema):
         cleaned["summary"] = cleaned["summary"][:4000]
     if isinstance(cleaned.get("headline"), str):
         cleaned["headline"] = cleaned["headline"][:80]
+    portrait = cleaned.get("portrait", "")
+    cleaned["portrait"] = portrait[:500] if isinstance(portrait, str) else ""
     return cleaned
 
 
@@ -288,12 +297,12 @@ class AI:
                 continue
             content.append({"type": "image_url", "image_url": {
                 "url": "data:image/jpeg;base64," + base64.b64encode(encoded).decode()}})
-        schema = Output.model_json_schema()
-        schema["required"] = list(schema["properties"])
+        schema = interpretation_schema()
         vision = len(content) > 1
         try:
+            from queep.portrait import PORTRAIT_PROMPT
             value = self.chat(
-                INTERPRETER, PROMPT, content, schema, "interpretation",
+                INTERPRETER, PROMPT + PORTRAIT_PROMPT, content, schema, "interpretation",
                 max_tokens=1536 if vision else 768, timeout=90 if vision else 35)
             result = Output.model_validate(normalize_output(value, schema))
         except ValueError as exc:
@@ -382,8 +391,7 @@ transcript só pode estar vazio se nenhuma fala do autor for identificável. Lim
                             {"type": "image_url", "image_url": {
                                 "url": "data:image/jpeg;base64," +
                                        base64.b64encode(frame).decode()}}]
-            schema = Output.model_json_schema()
-            schema["required"] = list(schema["properties"])
+            schema = interpretation_schema()
             try:
                 value = self.chat(INTERPRETER, PROMPT + """
 Estas imagens são amostras de cenas de um vídeo, sem áudio ou título. Descreva somente
@@ -464,10 +472,15 @@ coverage deve ser partial. Resumo de até duas frases; limitações somente conc
 
 
 def document(reference, analysis):
+    """Embedding text. The portrait preamble stays first so v8 can replace the body."""
+    from queep.portrait import portrait_preamble
+
     visuals = ("Aparência: " + clip("; ".join(analysis.appearance), 800)
                if analysis.appearance else "")
+    lead = portrait_preamble(reference, analysis)
     if reference.media:
         return "\n".join(part for part in [
+            lead,
             clip(reference.title, 400),
             "Interpretação: " + clip(analysis.model_dump_json(), 2200),
             visuals,
@@ -475,6 +488,7 @@ def document(reference, analysis):
         ] if part)
     if reference.source and reference.source.state == "read":
         return "\n".join(part for part in [
+            lead,
             clip(reference.title, 300), reference.source.title,
             clip(reference.url or "", 500), clip(reference.text, 800),
             "Interpretação: " + clip(analysis.model_dump_json(), 1800),
@@ -484,6 +498,7 @@ def document(reference, analysis):
              if reference.transcript else ""),
         ] if part)
     return "\n".join(part for part in [
+        lead,
         clip(reference.title, 600), clip(reference.text, 3500),
         clip(reference.url or "", 1000),
         "Interpretação: " + clip(analysis.model_dump_json(), 1800),
