@@ -15,18 +15,17 @@ HEAD_LIMIT = 6
 # Used for queries that are neither a short theme nor a color constraint.
 TAIL_RELATIVE_GAP = 0.55
 # Short themes ("interface", "web design", "mobile"): 1–2 content words, no color.
-# The fused head stays in order. Extra rows have to clear a cosine floor; an RRF
-# gap does not, because k=60 keeps almost every fusion score within 15% of the best.
+# On this library cosine scores sit in a tight band (about 0.54–0.76), so a
+# fraction of the best neighbor never cuts. Compare each score to that query's
+# own mean and spread instead.
 BROAD_TOKEN_LIMIT = 2
 FUSED_PROTECT = 10
-# Neighbor stays when cosine >= max(absolute, relative * best cosine).
-# 0.82 drops a shelf that has fallen off the best neighbor; 0.40 rejects a query
-# that never lands on this library. Cap keeps a flat-but-real theme inside 20–45.
-BROAD_COSINE_RELATIVE = 0.82
-BROAD_COSINE_FLOOR = 0.40
+# Non-lexical rows must clear mean + z * std of this query's cosine scores.
+BROAD_Z_CUT = 1.0
+# And only a few of those outliers join the list. Lexical rows are always eligible.
+BROAD_NONLEX_LIMIT = 4
+# Safety cap once lexical matches already cover the relevant chunk.
 BROAD_RESULT_CAP = 40
-# No lexical support (or the best cosine misses the absolute floor): short list.
-BROAD_MISS_LIMIT = 8
 # "Log in" / "Sign up" on most pages is chrome. A rare page term still counts.
 CHROME_DF_MAX = 8
 _CHROME_FIELDS = frozenset({"source_text", "transcript"})
@@ -138,8 +137,10 @@ def content_words(query):
 
 
 def is_broad_query(query):
-    """A short theme with no color. 'web design roxo' is not broad."""
-    return not _families_in(query) and 0 < len(content_words(query)) <= BROAD_TOKEN_LIMIT
+    """A short theme with no color. 'web design roxo' and 'somente vídeos' are not broad."""
+    if _families_in(query) or strict_video_query(query):
+        return False
+    return 0 < len(content_words(query)) <= BROAD_TOKEN_LIMIT
 
 
 def _attribute_blob(record):
@@ -162,8 +163,8 @@ def _specific_window(scored, families):
     return [item[2] for item in scored[:SPECIFIC_MISS_LIMIT]]
 
 
-def _support_ids(records, query, expansions):
-    """Ids that actually mention the theme. Ubiquitous page chrome does not."""
+def lexical_ids(records, query, expansions=()):
+    """Ids that mention the theme in a real field. Ubiquitous page chrome does not."""
     wanted = set(tokenize(query))
     wanted.update(tokenize(" ".join(expansions or ())))
     if not wanted:
@@ -200,36 +201,45 @@ def _support_ids(records, query, expansions):
     return strong
 
 
-def _cosine_floor(best):
-    if best <= 0:
-        return BROAD_COSINE_FLOOR
-    return max(BROAD_COSINE_FLOOR, best * BROAD_COSINE_RELATIVE)
+def _z_cut(scores):
+    """Mean + z·std. A flat shelf has std 0, so only an exact tie meets the cut."""
+    if not scores:
+        return 1.0
+    mean = sum(scores) / len(scores)
+    variance = sum((score - mean) ** 2 for score in scores) / len(scores)
+    return mean + BROAD_Z_CUT * math.sqrt(variance)
 
 
-def _broad_window(scored, cosine_rows, support_ids):
-    """Fused head, then only neighbors that clear a cosine floor.
+def _broad_window(scored, cosine_rows, matched_ids):
+    """Lexical rows, plus a few cosine outliers, fused head first.
 
-    The old loose fusion gap (0.85) plus a cosine backfill put the whole shelf
-    back into the window and only reordered it. Order of the fused head stays.
+    A ratio of the best cosine keeps the whole shelf when scores are bunched.
+    Rows that match the query stay eligible. Rows that do not have to sit above
+    this query's mean + std, and only the strongest few of those are added.
+    The fused head keeps its order. The rest follow cosine so a labeled neighbor
+    the keyword list buried can still land inside the top 30.
     """
     fused_ids = [item[1] for item in scored]
     by_id = {item[1]: item[2] for item in scored}
     if not fused_ids:
         return []
-    cosine_score = {row[1]: row[0] for row in cosine_rows}
-    best = cosine_rows[0][0] if cosine_rows else 0.0
-    floor = _cosine_floor(best)
-    if not support_ids or best < BROAD_COSINE_FLOOR:
-        return [by_id[identifier] for identifier in fused_ids[:BROAD_MISS_LIMIT]]
-    passing = [identifier for identifier in fused_ids
-               if cosine_score.get(identifier, 0.0) >= floor]
-    if len(passing) > BROAD_RESULT_CAP:
-        return [by_id[identifier] for identifier in fused_ids[:BROAD_RESULT_CAP]]
-    head = fused_ids[:FUSED_PROTECT]
-    seen = set(head)
-    body = [identifier for identifier in passing if identifier not in seen]
-    chosen = (head + body)[:BROAD_RESULT_CAP]
-    return [by_id[identifier] for identifier in chosen]
+    matched = set(matched_ids)
+    lexical = [identifier for identifier in fused_ids if identifier in matched]
+    cut = _z_cut([row[0] for row in cosine_rows])
+    extras = [row[1] for row in cosine_rows if row[1] not in matched and row[0] >= cut]
+    if len(lexical) > BROAD_RESULT_CAP:
+        head = [identifier for identifier in fused_ids[:FUSED_PROTECT] if identifier in matched]
+        rest = [row[1] for row in cosine_rows if row[1] in matched and row[1] not in head]
+        chosen = (head + rest)[:BROAD_RESULT_CAP]
+        return [by_id[identifier] for identifier in chosen]
+    room = BROAD_RESULT_CAP - len(lexical)
+    eligible = set(lexical)
+    eligible.update(extras[:min(BROAD_NONLEX_LIMIT, max(room, 0))])
+    if not eligible:
+        return [by_id[identifier] for identifier in fused_ids[:FUSED_PROTECT]]
+    head = [identifier for identifier in fused_ids[:FUSED_PROTECT] if identifier in eligible]
+    rest = [row[1] for row in cosine_rows if row[1] in eligible and row[1] not in head]
+    return [by_id[identifier] for identifier in head + rest]
 
 
 def vector_order(records, vector):
@@ -357,7 +367,7 @@ def fuse_order(records, vector, query, expansions=()):
     if families:
         return _specific_window(scored, families)
     if is_broad_query(query):
-        return _broad_window(scored, vectors, _support_ids(active, query, expansions))
+        return _broad_window(scored, vectors, lexical_ids(active, query, expansions))
     return [item[2] for item in cut_tail(scored)]
 
 

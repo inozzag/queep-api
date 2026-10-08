@@ -12,7 +12,7 @@ from queep.config import database
 from queep.lexicon import expand_terms
 from queep.models import Interpretation
 from queep.ranking import (
-    BROAD_MISS_LIMIT,
+    BROAD_NONLEX_LIMIT,
     BROAD_RESULT_CAP,
     FUSED_PROTECT,
     HEAD_LIMIT,
@@ -93,17 +93,18 @@ def test_checker_subset_does_not_hide_the_unverified_tail():
     assert "item-01" not in ids
 
 
-def test_broad_query_keeps_later_cosine_neighbors():
-    """A short theme must not stop at the minimum when cosine still has matches."""
-    rows = [_record("keyword", _weak(), analysis={"summary": "Interface rara"})]
-    for index in range(15):
-        rows.append(_record(
-            f"near-{index:02d}", _vector(index / 1000), analysis={"summary": "Paisagem"}))
+def test_broad_query_keeps_a_few_strong_cosine_neighbors():
+    """Lexical row stays first. Only neighbors above this shelf's mean + std come along."""
+    rows = []
+    for index in range(57):
+        score = 0.684 - (0.684 - 0.538) * (index / 56) ** 0.5
+        summary = "Interface rara" if index == 20 else "Paisagem"
+        rows.append(_record(f"row-{index:02d}", _at_cosine(score), analysis={"summary": summary}))
     ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
-    assert ordered[0] == "keyword"
-    assert ordered[:FUSED_PROTECT][0] == "keyword"
-    assert len(ordered) == 16
-    assert "near-14" in ordered
+    assert ordered[0] == "row-20"
+    assert "row-00" in ordered
+    assert "row-56" not in ordered
+    assert len(ordered) <= 1 + BROAD_NONLEX_LIMIT
 
 
 def test_two_word_theme_is_broad_and_a_third_word_is_not():
@@ -114,8 +115,7 @@ def test_two_word_theme_is_broad_and_a_third_word_is_not():
             f"weak-{index:02d}", _weak(), analysis={"summary": "Paisagem sem termo"}))
     broad = [item["id"] for item in order_ready(rows, QUERY, "web design")]
     longer = [item["id"] for item in order_ready(rows, QUERY, "site hero website")]
-    assert broad[0] == "best" and len(broad) == FUSED_PROTECT
-    assert "weak-14" not in broad
+    assert broad == ["best"]
     assert longer[0] == "best" and len(longer) == MIN_RESULTS
 
 
@@ -149,50 +149,102 @@ def test_flat_theme_caps_instead_of_returning_the_shelf():
     assert "ui-56" not in ordered
 
 
-def test_broad_head_keeps_a_weak_keyword_and_later_cosine_neighbors():
+def test_broad_head_keeps_a_weak_keyword_and_a_few_close_neighbors():
     rows = [_record("keyword", _at_cosine(0.05), analysis={"summary": "Interface rara"})]
     rows.extend(
-        _record(f"near-{index:02d}", _at_cosine(0.96), analysis={"summary": "Paisagem"})
+        _record(f"near-{index:02d}", _at_cosine(0.96 - index * 0.001),
+                analysis={"summary": "Paisagem"})
         for index in range(20))
     rows.extend(
         _record(f"far-{index:02d}", _at_cosine(0.12), analysis={"summary": "Outro"})
         for index in range(36))
     ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
     assert ordered[0] == "keyword"
-    assert "near-14" in ordered
+    assert ordered[1] == "near-00"
+    assert "near-14" not in ordered
     assert "far-00" not in ordered
-    assert BROAD_MISS_LIMIT < len(ordered) <= BROAD_RESULT_CAP
+    assert len(ordered) == 1 + BROAD_NONLEX_LIMIT
 
 
-def test_login_without_support_stays_short_even_when_cosine_is_flat():
-    rows = [
-        _record(
-            f"row-{index:02d}", _at_cosine(0.96 - (index % 5) * 0.005),
-            analysis={"summary": "Interface de produto"},
-            source={"text": "Log in Sign up"},
-        )
-        for index in range(57)
-    ]
-    ordered = [item["id"] for item in order_ready(rows, QUERY, "login", expand_terms("login"))]
-    assert len(ordered) == BROAD_MISS_LIMIT
-    assert len(ordered) < MIN_RESULTS
-
-
-def test_rare_page_term_still_opens_the_broad_window():
+def test_login_on_a_bunched_shelf_stays_near_the_lexical_count():
+    """Live shape: best .674, worst .549, five items actually say login, chrome does not count."""
     rows = []
-    for index in range(30):
+    for index in range(57):
+        score = 0.674 - (0.674 - 0.549) * index / 56
+        summary = "Tela de login" if index < 5 else "Interface de produto"
+        rows.append(_record(
+            f"row-{index:02d}", _at_cosine(score),
+            analysis={"summary": summary},
+            source={"text": "Log in Sign up"},
+        ))
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "login", expand_terms("login"))]
+    assert all(f"row-{index:02d}" in ordered for index in range(5))
+    assert len(ordered) <= 12
+    assert len(ordered) <= 5 + BROAD_NONLEX_LIMIT
+    assert "row-56" not in ordered
+
+
+def test_bunched_shelf_tracks_lexical_evidence():
+    """Lengths from the live best/worst bands: few matches stay short, themes stay under 40."""
+    bands = [
+        ("paywall", 0.680, 0.545, 51, 9, 9, 15),
+        ("mobile", 0.690, 0.565, 56, 15, 15, 20),
+        ("interface", 0.684, 0.538, 52, 28, 28, 40),
+        ("web design", 0.761, 0.578, 48, 38, 30, 40),
+        ("website", 0.740, 0.579, 51, 38, 30, 40),
+    ]
+    for query, best, worst, n_high, lexical, low, high in bands:
+        floor = 0.82 * best
+        rows = []
+        for index in range(57):
+            if index < n_high:
+                score = best - (best - floor) * index / max(n_high - 1, 1)
+            else:
+                score = floor - (floor - worst) * (index - n_high + 1) / max(57 - n_high, 1)
+            summary = f"{query} de referência" if index < lexical else "Paisagem sem termo"
+            rows.append(_record(
+                f"row-{index:02d}", _at_cosine(score), analysis={"summary": summary}))
+        ordered = [item["id"] for item in order_ready(rows, QUERY, query, expand_terms(query))]
+        assert low <= len(ordered) <= high, query
+        assert len(ordered) < 57
+        assert ordered[:FUSED_PROTECT] == [f"row-{index:02d}" for index in range(FUSED_PROTECT)]
+        assert all(f"row-{index:02d}" in ordered for index in range(lexical))
+
+
+def test_cosine_tail_keeps_a_close_lexical_item_ahead_of_a_weak_one():
+    """Fused head stays put. After it, cosine order puts the close labeled row forward."""
+    rows = [
+        _record(f"head-{index:02d}", _at_cosine(0.62 - index * 0.002), title="interface")
+        for index in range(10)
+    ]
+    rows.append(_record("close", _at_cosine(0.90), analysis={"topics": ["ui"]}))
+    rows.append(_record("late", _at_cosine(0.50), title="interface"))
+    rows.extend(
+        _record(f"far-{index:02d}", _at_cosine(0.58), analysis={"summary": "Paisagem"})
+        for index in range(30))
+    terms = expand_terms("interface")
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "interface", terms)]
+    assert ordered[:10] == [f"head-{index:02d}" for index in range(10)]
+    assert "close" in ordered and "late" in ordered
+    assert ordered.index("close") < ordered.index("late")
+    assert ordered.index("close") == 10
+    assert "far-00" not in ordered
+
+
+def test_rare_page_term_adds_a_few_neighbors_not_the_shelf():
+    rows = []
+    for index in range(57):
+        score = 0.680 - (0.680 - 0.545) * index / 56
         source = {"text": "The pricing paywall blocks the app"} if index < 3 else None
         rows.append(_record(
-            f"near-{index:02d}", _at_cosine(0.96),
+            f"row-{index:02d}", _at_cosine(score),
             analysis={"summary": "Tela de produto"}, source=source))
-    rows.extend(
-        _record(f"far-{index:02d}", _at_cosine(0.15), analysis={"summary": "Paisagem"})
-        for index in range(27))
     ordered = [item["id"] for item in order_ready(rows, QUERY, "paywall", expand_terms("paywall"))]
-    assert "near-14" in ordered
-    assert "far-00" not in ordered
-    assert len(ordered) > BROAD_MISS_LIMIT
-    assert len(ordered) <= BROAD_RESULT_CAP
+    assert all(f"row-{index:02d}" in ordered for index in range(3))
+    assert "row-00" in ordered
+    assert "row-56" not in ordered
+    assert 3 < len(ordered) <= 3 + BROAD_NONLEX_LIMIT
+    assert len(ordered) <= 15
 
 
 def test_tail_cut_keeps_the_minimum_when_scores_fall_off():

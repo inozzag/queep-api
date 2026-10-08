@@ -15,9 +15,9 @@ from eval.recall import (
 from queep.ai import AIError
 from queep.models import Interpretation
 from queep.ranking import (
-    BROAD_COSINE_FLOOR,
-    BROAD_MISS_LIMIT,
+    BROAD_NONLEX_LIMIT,
     BROAD_RESULT_CAP,
+    BROAD_Z_CUT,
     FUSED_PROTECT,
     SPECIFIC_MISS_LIMIT,
 )
@@ -72,8 +72,8 @@ def test_recall_header_names_the_adaptive_cut():
     header = render_header()
     assert f"protege={FUSED_PROTECT}" in header
     assert f"teto_amplo={BROAD_RESULT_CAP}" in header
-    assert f"piso={BROAD_COSINE_FLOOR}" in header
-    assert f"sem_apoio={BROAD_MISS_LIMIT}" in header
+    assert f"z={BROAD_Z_CUT}" in header
+    assert f"vizinhos={BROAD_NONLEX_LIMIT}" in header
     assert f"sem_cor={SPECIFIC_MISS_LIMIT}" in header
 
 

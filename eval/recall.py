@@ -18,10 +18,10 @@ Run where ADC can read ``queep-dev-hstlx`` (this repo has no credentials):
 About US$0.0002 per query for the embedding. ``--checker`` adds one verifier
 call per query and gives up after 20 seconds; a timeout keeps the ranked list.
 Empty labels print the count only. Color queries with no evidence are capped
-at a short near-miss list. Short themes (1–2 words, no color) keep the fused
-head, then only cosine neighbors above a floor, capped so a flat shelf is not
-returned whole. A theme with no lexical support stays a short list. After a
-real run, tune the constants in ``queep/ranking.py``.
+at a short near-miss list. Short themes (1–2 words, no color) keep every row
+that mentions the query, plus a few neighbors above that query's mean cosine
+plus one standard deviation. The fused head stays in order; the rest follow
+cosine. After a real run, tune the constants in ``queep/ranking.py``.
 """
 
 import argparse
@@ -38,11 +38,10 @@ from queep.ai import AIError  # noqa: E402
 from queep.lexicon import expand_terms  # noqa: E402
 from queep.models import Reference  # noqa: E402
 from queep.ranking import (  # noqa: E402
-    BROAD_COSINE_FLOOR,
-    BROAD_COSINE_RELATIVE,
-    BROAD_MISS_LIMIT,
+    BROAD_NONLEX_LIMIT,
     BROAD_RESULT_CAP,
     BROAD_TOKEN_LIMIT,
+    BROAD_Z_CUT,
     EXPANSION_WEIGHT,
     FUSED_PROTECT,
     HEAD_LIMIT,
@@ -53,6 +52,7 @@ from queep.ranking import (  # noqa: E402
     TAIL_RELATIVE_GAP,
     VECTOR_WEIGHT,
     contradicting_ids,
+    lexical_ids,
     order_ready,
     vector_order,
 )
@@ -114,10 +114,13 @@ def apply_checker(ai, query, fused_records):
     return ordered, failed
 
 
-def render_labeled(query, fused, cosine, relevant):
+def render_labeled(query, fused, cosine, relevant, lexical=None):
     lines = []
     for name, ranked in (("fusão", fused), ("cosseno", cosine)):
-        lines.append(_line(query, name, ranked, relevant))
+        line = _line(query, name, ranked, relevant)
+        if name == "fusão" and lexical is not None:
+            line += f" | lex={lexical}"
+        lines.append(line)
     return lines
 
 
@@ -135,8 +138,7 @@ def render_header():
     return (
         f"constantes: janela={RESULT_LIMIT} mínimo={MIN_RESULTS} "
         f"protege={FUSED_PROTECT} teto_amplo={BROAD_RESULT_CAP} "
-        f"piso={BROAD_COSINE_FLOOR} relativo={BROAD_COSINE_RELATIVE} "
-        f"sem_apoio={BROAD_MISS_LIMIT} "
+        f"z={BROAD_Z_CUT} vizinhos={BROAD_NONLEX_LIMIT} "
         f"palavras_amplas<={BROAD_TOKEN_LIMIT} "
         f"sem_cor={SPECIFIC_MISS_LIMIT} "
         f"cabeça={HEAD_LIMIT} folga={TAIL_RELATIVE_GAP} "
@@ -184,10 +186,13 @@ def main(argv=None):
         return 0
     for item in labeled:
         vector = ai.embed(item["query"], query=True)
-        fused_records = order_ready(records, vector, item["query"], expand_terms(item["query"]))
+        terms = expand_terms(item["query"])
+        fused_records = order_ready(records, vector, item["query"], terms)
         fused = [row["id"] for row in fused_records]
-        cosine = [row[1] for row in vector_order(records, vector)]
-        for line in render_labeled(item["query"], fused, cosine, item["relevant"]):
+        cosine_rows = vector_order(records, vector)
+        cosine = [row[1] for row in cosine_rows]
+        matched = len(lexical_ids([row[2] for row in cosine_rows], item["query"], terms))
+        for line in render_labeled(item["query"], fused, cosine, item["relevant"], matched):
             print(line)
         if args.checker:
             checked, failed = apply_checker(ai, item["query"], fused_records)
