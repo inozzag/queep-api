@@ -10,7 +10,14 @@ from queep.ai import SPACE
 from queep.config import database
 from queep.lexicon import expand_terms
 from queep.models import Interpretation
-from queep.ranking import HEAD_LIMIT, MIN_RESULTS, bm25_ranks, contradicting_ids, order_ready
+from queep.ranking import (
+    FUSED_PROTECT,
+    HEAD_LIMIT,
+    MIN_RESULTS,
+    bm25_ranks,
+    contradicting_ids,
+    order_ready,
+)
 from queep.repository import Repository
 from queep.search import search
 
@@ -73,6 +80,31 @@ def test_checker_subset_does_not_hide_the_unverified_tail():
     assert ids[0] == "item-00"
     assert ids[1:] == [f"item-{index:02d}" for index in range(HEAD_LIMIT, 20)]
     assert "item-01" not in ids
+
+
+def test_broad_query_keeps_later_cosine_neighbors():
+    """A short theme must not stop at the minimum when cosine still has matches."""
+    rows = [_record("keyword", _weak(), analysis={"summary": "Interface rara"})]
+    for index in range(15):
+        rows.append(_record(
+            f"near-{index:02d}", _vector(index / 1000), analysis={"summary": "Paisagem"}))
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
+    assert ordered[0] == "keyword"
+    assert ordered[:FUSED_PROTECT][0] == "keyword"
+    assert len(ordered) == 16
+    assert "near-14" in ordered
+
+
+def test_two_word_theme_is_broad_and_a_third_word_is_not():
+    rows = [_record(
+        "best", QUERY, analysis={"summary": "Web design de um site com hero e website"})]
+    for index in range(15):
+        rows.append(_record(
+            f"weak-{index:02d}", _weak(), analysis={"summary": "Paisagem sem termo"}))
+    broad = [item["id"] for item in order_ready(rows, QUERY, "web design")]
+    longer = [item["id"] for item in order_ready(rows, QUERY, "site hero website")]
+    assert broad[0] == "best" and len(broad) == 16
+    assert longer[0] == "best" and len(longer) == MIN_RESULTS
 
 
 def test_tail_cut_keeps_the_minimum_when_scores_fall_off():

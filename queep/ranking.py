@@ -3,7 +3,7 @@
 import math
 import re
 
-from queep.textnorm import fold, tokenize
+from queep.textnorm import SHORT_TOKENS, STOPWORDS, fold, tokenize
 
 # Window returned to the client. Inside the 40–80 target; raise after eval/recall.py.
 RESULT_LIMIT = 60
@@ -12,8 +12,15 @@ MIN_RESULTS = 12
 # Contradiction checker only. The tail is returned unverified so the prompt stays ~19.5 KB.
 HEAD_LIMIT = 8
 # Keep a hit when its score is at least (1 - gap) times the best score.
-# Wide on purpose: reciprocal-rank scores decay slowly. Calibrate with eval/recall.py.
+# Used for queries that are neither a short theme nor a color constraint.
 TAIL_RELATIVE_GAP = 0.55
+# Short themes ("interface", "web design", "mobile"): 1–2 content words, no color.
+# The fused head stays put so precision at 10 holds; the cosine list then fills
+# the window so a short fusion cannot hide neighbors the vector rank already had.
+BROAD_TOKEN_LIMIT = 2
+FUSED_PROTECT = 10
+BROAD_COSINE_KEEP = 45
+BROAD_GAP = 0.85
 RRF_K = 60
 VECTOR_WEIGHT = 1.0
 KEYWORD_WEIGHT = 1.25
@@ -85,21 +92,68 @@ def cosine(query, embedding):
     return dot / math.sqrt(norm_query * norm_embedding)
 
 
-def cut_tail(ranked):
+def cut_tail(ranked, gap=None, minimum=None):
     """Drop the weak tail relative to the best score, after the minimum count."""
     if not ranked:
         return []
+    gap = TAIL_RELATIVE_GAP if gap is None else gap
+    minimum = MIN_RESULTS if minimum is None else minimum
     best = ranked[0][0]
-    floor = best * (1.0 - TAIL_RELATIVE_GAP) if best > 0 else best
+    floor = best * (1.0 - gap) if best > 0 else best
     kept = []
     for item in ranked:
         if len(kept) >= RESULT_LIMIT:
             break
-        if item[0] >= floor or len(kept) < MIN_RESULTS:
+        if item[0] >= floor or len(kept) < minimum:
             kept.append(item)
             continue
         break
     return kept
+
+
+def content_words(query):
+    """Query words that count toward broad vs specific, without stem duplicates."""
+    words = []
+    for raw in re.findall(r"[a-z0-9]+", fold(query)):
+        if raw in STOPWORDS or (len(raw) < 3 and raw not in SHORT_TOKENS):
+            continue
+        words.append(raw)
+    return words
+
+
+def is_broad_query(query):
+    """A short theme with no color. 'web design roxo' is not broad."""
+    return not _families_in(query) and 0 < len(content_words(query)) <= BROAD_TOKEN_LIMIT
+
+
+def _broad_window(scored, cosine_rows):
+    """Fused prefix, then cosine neighbors the fusion score would have cut."""
+    loose = cut_tail(scored, gap=BROAD_GAP, minimum=MIN_RESULTS)
+    by_id = {item[1]: item[2] for item in scored}
+    loose_ids = [item[1] for item in loose]
+    head = loose_ids[:FUSED_PROTECT]
+    seen = set(head)
+    body = []
+
+    def room():
+        return RESULT_LIMIT - (len(head) + len(body))
+
+    for index, row in enumerate(cosine_rows):
+        if index >= BROAD_COSINE_KEEP or room() <= 0:
+            break
+        identifier = row[1]
+        if identifier in seen:
+            continue
+        body.append(identifier)
+        seen.add(identifier)
+    for identifier in loose_ids:
+        if identifier in seen:
+            continue
+        if room() <= 0:
+            break
+        body.append(identifier)
+        seen.add(identifier)
+    return [by_id[identifier] for identifier in head + body]
 
 
 def vector_order(records, vector):
@@ -223,6 +277,8 @@ def fuse_order(records, vector, query, expansions=()):
     scored = [(fused.get(identifier, 0.0), identifier, by_id[identifier])
               for identifier in vector_ids]
     scored.sort(key=lambda item: (-item[0], item[1]))
+    if is_broad_query(query):
+        return _broad_window(scored, vectors)
     return [item[2] for item in cut_tail(scored)]
 
 
