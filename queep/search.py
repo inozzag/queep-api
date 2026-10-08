@@ -1,4 +1,3 @@
-import math
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -7,11 +6,12 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from queep.ai import SPACE, AIError
 from queep.cost_context import attribution
 from queep.models import Reference, SearchResults
+from queep.ranking import HEAD_LIMIT, RESULT_LIMIT, contradicting_ids, order_ready, vector_order
 from queep.usage import policy
 
-# Cosine neighbors considered before the verifier. Archived rows must not take one of these slots.
+# Legacy shortlist size. Archived rows must not take a neighbor slot; the live window is larger.
 NEIGHBOR_LIMIT = 50
-CANDIDATE_LIMIT = 10
+CANDIDATE_LIMIT = RESULT_LIMIT
 
 
 def search(repo, ai, uid, query, space_id=None):
@@ -36,64 +36,52 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     # archived neighbor cannot consume a slot ahead of a live one.
     records = [document.to_dict() for document in ready.stream()]
     if not any(record.get("archived_at") is None for record in records):
-        return SearchResults(items=[], has_pending=has_pending)
+        return SearchResults(items=[], has_pending=has_pending, candidate_limit=RESULT_LIMIT)
     token = ai.budget.rate_limit(uid)
     try:
         vector = ai.embed(query, query=True)
-        neighbors = nearest_active(records, vector)
-        # Resolve current revisions both before sending to the model and before returning.
-        candidates = current_references(
-            repo, uid, [Reference.model_validate(item) for item in neighbors], space_id
-        )[:CANDIDATE_LIMIT]
-        selected = ai.verify(query, candidates)
-        by_id = {ref.id: ref for ref in candidates}
-        visible = current_references(
-            repo, uid, [by_id[identifier] for identifier in selected], space_id)
-        result = SearchResults(items=visible, has_pending=has_pending)
     except AIError:
-        release = getattr(ai.budget, "release_search", None)
-        if release is not None:
-            release(uid, token)
+        _release(ai, uid, token)
         raise
+    ranked = order_ready(records, vector)
+    # Resolve current revisions both before the checker and before returning.
+    candidates = current_references(
+        repo, uid, [Reference.model_validate(item) for item in ranked], space_id)
+    head, tail = candidates[:HEAD_LIMIT], candidates[HEAD_LIMIT:]
+    checker_failed = False
+    try:
+        selected = ai.verify(query, head) if head else []
+    except AIError:
+        # A dead checker must not look like an empty library or spend the search.
+        checker_failed = True
+        selected = [ref.id for ref in head]
+    kept = set(selected)
+    if not checker_failed:
+        kept -= set(contradicting_ids(query, [ref for ref in head if ref.id in kept]))
+    ordered = [ref for ref in head if ref.id in kept] + list(tail)
+    visible = current_references(repo, uid, ordered, space_id)
+    if checker_failed:
+        _release(ai, uid, token)
+    else:
+        _commit(ai, uid, token)
+    return SearchResults(items=visible, has_pending=has_pending, candidate_limit=CANDIDATE_LIMIT)
+
+
+def _release(ai, uid, token):
+    release = getattr(ai.budget, "release_search", None)
+    if release is not None:
+        release(uid, token)
+
+
+def _commit(ai, uid, token):
     commit = getattr(ai.budget, "commit_search", None)
     if commit is not None and token:
         commit(uid, token)
-    return result
 
 
 def nearest_active(records, vector, limit=NEIGHBOR_LIMIT):
-    ranked = []
-    for data in records:
-        if data.get("archived_at") is not None:
-            continue
-        score = _similarity(vector, _floats(data.get("embedding")))
-        if score is None:
-            continue
-        ranked.append((score, data.get("id") or "", data))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
-    return [item[2] for item in ranked[:limit]]
-
-
-def _floats(value):
-    if value is None:
-        return None
-    try:
-        return [float(item) for item in value]
-    except (TypeError, ValueError):
-        return None
-
-
-def _similarity(query, embedding):
-    if not query or not embedding or len(query) != len(embedding):
-        return None
-    dot = norm_query = norm_embedding = 0.0
-    for left, right in zip(query, embedding, strict=True):
-        dot += left * right
-        norm_query += left * left
-        norm_embedding += right * right
-    if norm_query <= 0 or norm_embedding <= 0:
-        return None
-    return dot / math.sqrt(norm_query * norm_embedding)
+    """Active cosine neighbors. Archived rows never occupy a slot."""
+    return [item[2] for item in vector_order(records, vector)[:limit]]
 
 
 def current_references(repo, uid, references, space_id=None):

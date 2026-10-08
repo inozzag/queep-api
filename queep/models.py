@@ -133,7 +133,9 @@ class Search(BaseModel):
 class SearchResults(BaseModel):
     items: list[Reference]
     has_pending: bool
-    candidate_limit: int = 10
+    # Cap of the ranked window. Clients that size the grid from this field should
+    # read it (historically 10). The server sets the active value on each response.
+    candidate_limit: int = 60
 
 
 class ArchiveEdit(BaseModel):

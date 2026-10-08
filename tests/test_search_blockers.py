@@ -105,7 +105,7 @@ def _usage(uid, now):
     return document(database(), uid, now).get().to_dict() or {}
 
 
-def test_verifier_failure_keeps_monthly_quota_and_asks_to_retry(client, account):
+def test_verifier_failure_returns_the_ranked_list_without_spending(client, account):
     uid, headers = account
     repo = Repository(database())
     put_ready(repo, uid, "live-note", QUERY, archived_at=None)
@@ -122,9 +122,8 @@ def test_verifier_failure_keeps_monthly_quota_and_asks_to_retry(client, account)
         response = client.post("/v1/search", headers=headers, json={"query": "CRM branco"})
     finally:
         app.dependency_overrides.pop(engine, None)
-    assert response.status_code == 503
-    assert response.headers["Retry-After"] == "1"
-    assert "items" not in response.json()
+    assert response.status_code == 200, response.text
+    assert [item["id"] for item in response.json()["items"]] == ["live-note"]
     stored = _usage(uid, now)
     assert stored.get("searches") == 3
     assert not stored.get("pending_searches")

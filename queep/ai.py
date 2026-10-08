@@ -71,8 +71,13 @@ vídeo: inclua esses links na seleção mesmo sem serem arquivos. "Ferramentas p
 criar vídeos" pede ferramentas, não um formato: use any.
 O assunto principal pode estar na fala de um áudio/vídeo. Respeite kind: áudio não
 é vídeo e não contém cenas. Não elimine referências distintas só por tratarem do mesmo assunto.
-Retorne IDs em ordem de relevância, somente quando há evidência de correspondência.
-Se nenhum corresponde, retorne lista vazia. Não invente IDs, itens ou fatos.
+A API já ordenou por relevância e só envia a cabeça da lista. Seu papel é filtro de
+contradição, não uma seleção curta. Mantenha tema amplo, menção parcial e correspondência
+fraca. Omita um ID somente quando ele contradiz um pedido explícito: negação, cor errada
+numa busca por cor, objeto errado, ou mídia restrita com "somente/apenas/only"
+("somente vídeos" exclui nota, imagem, áudio e página comum; YouTube, Vimeo e posts
+continuam elegíveis). "Vídeos sobre X" não é essa restrição: não esvazie a lista.
+Se nada contradiz, retorne todos os IDs recebidos. Não invente IDs, itens ou fatos.
 Não faça uma recomendação de fora do acervo e não afirme ter encontrado tudo que existe.
 """
 

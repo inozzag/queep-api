@@ -9,13 +9,20 @@ execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição
 invalida o processamento anterior. O botão de nova tentativa abre outra execução.
 
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
-embeddings. Seleciona 10 candidatos e confere correspondência; revalida revisões e
-exclusões antes de responder. Pode retornar vazio. Não garante todos os resultados
-de uma biblioteca grande. Consultas usam POST para não expor o texto em URLs.
+embeddings. Ordena o acervo ativo já carregado e devolve uma janela (teto 60,
+`candidate_limit` na resposta; o cliente que limitar a grade por esse campo passa a
+mostrar a lista maior). Um corte de cauda relativo ao melhor score mantém no mínimo
+12 itens quando a biblioteca tem esse tanto. A conferência roda só na cabeça (8
+itens, dentro do orçamento de ~19,5 KB) e só tira contradição explícita; o restante
+volta sem passar pelo modelo. Se a conferência falha, a lista ordenada volta mesmo
+assim e a busca mensal não é debitada. Revalida revisões e exclusões antes de
+responder. Consultas usam POST para não expor o texto em URLs.
 O verificador informa também se a consulta exige um formato (`requested_kind`). A
-API confere os tipos reais antes de devolver os IDs; um pedido explícito de vídeo
-não pode retornar áudio, mesmo que o modelo o inclua na seleção. Assunto e formato
-são separados: ferramentas para criar vídeos não precisam ser arquivos de vídeo.
+API confere os tipos reais antes de devolver os IDs da cabeça; um pedido explícito
+de vídeo não pode retornar áudio, mesmo que o modelo o inclua. "Somente vídeos"
+tira nota, imagem, áudio e página comum da cabeça; posts, páginas e YouTube
+continuam elegíveis numa busca visual ou de vídeo sem essa restrição. Assunto e
+formato são separados: ferramentas para criar vídeos não precisam ser arquivos de vídeo.
 
 | Etapa | Modelo / rota |
 | --- | --- |

@@ -44,7 +44,7 @@ para tentar adivinhar a fonte. Mantidos modelos, orçamento e reservas em [AI.md
 
 Conteúdo externo é dado não confiável nos prompts e exibido como texto no app.
 A extração depende do HTML recebido; páginas dinâmicas e mudanças de layout podem
-exigir ajustes. O limite de 10 candidatos da busca permanece.
+exigir ajustes. A busca devolve a janela ordenada descrita em [AI.md](AI.md), não mais um corte fixo de 10.
 
 ## Verificação
 
