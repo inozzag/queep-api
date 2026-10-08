@@ -98,6 +98,26 @@ de 50 itens e continua no dia seguinte. `--max-cost-usd` (padrão 0,50) é um
 segundo teto, pelo custo estimado. O comando também lê `used` do dia e não
 começa um item que não caiba na reserva.
 
+## Avaliação das consultas do acervo
+
+`eval/owner_queries.json` guarda só identificadores (sem texto dos itens). O
+script compara a lista fundida com a ordem só por cosseno e imprime recall@10,
+recall@30 e a quantidade devolvida. Rótulo vazio (`login`, `logos verdes`,
+`carro app logo azul`) imprime a contagem: uma lista curta é aceitável. Três
+consultas sem rótulo saem para leitura qualitativa. Não debita busca mensal.
+Cada consulta gasta um embedding (~US$ 0,0002). `--checker` acrescenta a
+conferência.
+
+```sh
+uv run --env-file .env.evaluation python eval/recall.py --uid UID
+```
+
+Mesmas variáveis do `--apply` do backfill, no projeto `queep-dev-hstlx`. Os
+pesos e o corte de cauda em `queep/ranking.py` são a calibração inicial; ajuste
+depois dessa rodada. Os testes em `tests/test_recall_eval.py` cobrem, sem
+credencial, consulta ampla, cor só na aparência, termo só na legenda, falha da
+conferência, cor errada e expansão PT/EN.
+
 ## Publicar
 
 1. `uv run --env-file .env.evaluation python infra/prepare-ai-dev.py` cria identidades,
