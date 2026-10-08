@@ -162,6 +162,13 @@ def encode_vision_frame(data):
         return None
 
 
+def interpretation_schema():
+    """Strict interpretation schema. `portrait` stays optional for the v8 prompt."""
+    schema = Output.model_json_schema()
+    schema["required"] = [name for name in schema["properties"] if name != "portrait"]
+    return schema
+
+
 def normalize_output(value, schema):
     """Keep a usable interpretation when the model adds keys or overfills lists."""
     if not isinstance(value, dict):
@@ -185,6 +192,8 @@ def normalize_output(value, schema):
             cleaned[key] = cleaned[key][:limit]
         elif key in cleaned and key != "summary":
             cleaned[key] = ""
+    portrait = cleaned.get("portrait", "")
+    cleaned["portrait"] = portrait[:500] if isinstance(portrait, str) else ""
     return cleaned
 
 
@@ -330,12 +339,12 @@ class AI:
                 continue
             content.append({"type": "image_url", "image_url": {
                 "url": "data:image/jpeg;base64," + base64.b64encode(encoded).decode()}})
-        schema = Output.model_json_schema()
-        schema["required"] = list(schema["properties"])
+        schema = interpretation_schema()
         vision = len(content) > 1
         try:
+            from queep.portrait import PORTRAIT_PROMPT
             value = self.chat(
-                INTERPRETER, PROMPT, content, schema, "interpretation",
+                INTERPRETER, PROMPT + PORTRAIT_PROMPT, content, schema, "interpretation",
                 max_tokens=1536 if vision else 768, timeout=90 if vision else 35)
             result = Output.model_validate(normalize_output(value, schema))
         except ValueError as exc:
@@ -426,8 +435,7 @@ transcript só pode estar vazio se nenhuma fala do autor for identificável. Lim
                             {"type": "image_url", "image_url": {
                                 "url": "data:image/jpeg;base64," +
                                        base64.b64encode(frame).decode()}}]
-            schema = Output.model_json_schema()
-            schema["required"] = list(schema["properties"])
+            schema = interpretation_schema()
             try:
                 value = self.chat(INTERPRETER, PROMPT + """
 Estas imagens são amostras de cenas de um vídeo, sem áudio ou título. Descreva somente
@@ -577,7 +585,10 @@ def _labeled(label, value, limit):
 
 
 def document(reference, analysis):
-    """Embedding text. v8 fields, appearance and the caption come before the long tail."""
+    """Embedding text. The portrait preamble stays first; v8 fields follow it."""
+    from queep.portrait import portrait_preamble
+
+    lead = portrait_preamble(reference, analysis)
     parts = [
         _labeled("", reference.title, 400),
         _labeled("", analysis.headline, 200),
@@ -595,14 +606,20 @@ def document(reference, analysis):
         _labeled("Nota", reference.text, 1500),
     ]
     body = "\n".join(part for part in parts if part)
-    remaining = EMBED_BUDGET - len(body.encode())
+    used = len(lead.encode()) + (1 if lead and body else 0) + len(body.encode())
+    remaining = EMBED_BUDGET - used
     extras = []
     if reference.url and remaining > 80:
-        extras.append(clip(reference.url, min(300, remaining)))
+        piece = clip(reference.url, min(300, remaining))
+        extras.append(piece)
+        remaining -= len(piece.encode()) + 1
     if reference.source and reference.source.state == "read" and remaining > 200:
-        extras.append("Página: " + clip(reference.source.text, min(2400, remaining // 2)))
-        if reference.source.title:
-            extras.append(clip(reference.source.title, 200))
+        page = "Página: " + clip(reference.source.text, min(2400, max(0, remaining // 2)))
+        extras.append(page)
+        remaining -= len(page.encode()) + 1
+        if reference.source.title and remaining > 40:
+            extras.append(clip(reference.source.title, min(200, remaining)))
+            remaining -= len(extras[-1].encode()) + 1
     if reference.transcript and remaining > 200:
         extras.append("Transcrição: " + clip(reference.transcript, min(2400, remaining // 2)))
-    return "\n".join(part for part in [body, *extras] if part)
+    return "\n".join(part for part in [lead, body, *extras] if part)

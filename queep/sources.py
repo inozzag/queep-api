@@ -557,13 +557,38 @@ def video_metadata(body, original):
             text=f"Título: {title[:1000]}\nAutor: {author[:200]}",
             fetched_at=datetime.now(UTC),
             limitations=[
-                "Somente título e autor públicos foram lidos. A fala e as cenas do vídeo "
+                "Somente título, autor e a capa pública foram lidos. A fala e as cenas do vídeo "
                 "não foram analisadas. Envie o arquivo para analisar o conteúdo."
             ],
             native_title=True,
         )
     except (ValueError, TypeError, AttributeError) as error:
         raise SourceError("empty") from error
+
+
+def video_posters(body, page):
+    """Public oEmbed poster and site icon. Private or relative junk is dropped."""
+    try:
+        value = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        return []
+    if not isinstance(value, dict):
+        return []
+    previews = []
+    thumb = public_asset_url(value.get("thumbnail_url"), page)
+    if thumb and not thumb.split("?", 1)[0].lower().endswith(".svg"):
+        previews.append({"url": thumb, "kind": "video"})
+    host = (page.host or "").lower()
+    if host in ("youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com"):
+        icon = "https://www.youtube.com/favicon.ico"
+    elif host in ("vimeo.com", "www.vimeo.com"):
+        icon = "https://vimeo.com/favicon.ico"
+    else:
+        icon = None
+    icon_url = public_asset_url(icon, page) if icon else None
+    if icon_url:
+        previews.append({"url": icon_url, "kind": "avatar"})
+    return previews
 
 
 def clean_tweet_text(text):
@@ -1052,7 +1077,7 @@ async def fetch(raw):
     endpoint = social_endpoint(original)
     if endpoint:
         body, _, _ = await fetch_resolved_body(checked_url(endpoint))
-        return video_metadata(body, original), None
+        return video_metadata(body, original), video_posters(body, original) or None
     return await fetch_site(original)
 
 
@@ -1093,19 +1118,36 @@ async def fetch_network(adapter, original, match):
                 attach = getattr(adapter, "attach_gallery", None)
                 if attach:
                     saved = attach(saved, media)
-                return saved, media
+                return saved, await instagram_avatar(adapter, match, saved, media)
             continue
         if not visible and adapter.name == "behance" and match.role == "post":
             saved = parsed
             previews = media
             continue
-        return parsed, media
+        return parsed, await instagram_avatar(adapter, match, parsed, media)
     if saved is not None:
-        return saved, previews
+        return saved, await instagram_avatar(adapter, match, saved, previews)
     fallback = adapter.fallback(original, match, previews)
     if fallback is not None:
-        return fallback, previews
+        return fallback, await instagram_avatar(adapter, match, fallback, previews)
     raise last or SourceError("empty")
+
+
+async def instagram_avatar(adapter, match, parsed, media):
+    """Public profile photo for an Instagram post whose reader had no avatar."""
+    if getattr(adapter, "name", "") != "instagram" or match.role != "post":
+        return media
+    if any(item.get("kind") == "avatar" for item in media):
+        return media
+    handle = (getattr(parsed, "author_handle", "") or "").lstrip("@")
+    if not handle:
+        return media
+    from queep.social.instagram import profile_avatar_url
+
+    avatar = await profile_avatar_url(handle)
+    if not avatar:
+        return media
+    return [{"url": avatar, "kind": "avatar"}, *list(media)]
 
 
 async def fetch_with_retry(raw):

@@ -139,7 +139,7 @@ class Jobs:
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
     def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None,
-               title=None, image=None, images=None, author_image=None):
+               title=None, image=None, images=None, author_image=None, media_incomplete=False):
         doc = self.repo.jobs().document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -170,7 +170,8 @@ class Jobs:
                            "transcript": transcript,
                            "embedding": Vector(vector), "embedding_space": SPACE,
                            "analysis_model": INTERPRETER["id"],
-                           "analysis_version": ANALYSIS_VERSION, "updated_at": now}
+                           "analysis_version": ANALYSIS_VERSION, "updated_at": now,
+                           "media_incomplete": bool(media_incomplete)}
                 if title and not (record.get("title") or "").strip():
                     payload["title"] = title
                 if image and not record.get("image"):
@@ -190,7 +191,11 @@ class Jobs:
             return True
         return self.repo.transact(write)
 
-    def retry(self, uid, ref_id, revision):
+    def retry(self, uid, ref_id, revision, scope="fetch"):
+        from queep.refetch import cooldown_remaining, eligible_retry
+
+        if scope not in ("fetch", "analysis"):
+            raise HTTPException(422, "Escopo inválido")
         access = policy(self.db, uid)
         doc = self.repo.collection(uid).document(ref_id)
         job = self.repo.job(uid, ref_id)
@@ -203,12 +208,21 @@ class Jobs:
                 raise HTTPException(404, "Referência não encontrada")
             if old["revision"] != revision:
                 raise HTTPException(409, "A referência mudou. Atualize antes de tentar")
-            if old["status"] != "error":
+            if old["status"] in ("queued", "processing"):
+                raise HTTPException(409, "Esta referência já está sendo analisada")
+            if not eligible_retry(old):
                 return Reference.model_validate(old)
             now = datetime.now(UTC)
+            wait = cooldown_remaining(old.get("fetch_retry_at"), now)
+            if wait:
+                raise HTTPException(
+                    429, "Aguarde antes de analisar este item de novo.",
+                    headers={"Retry-After": str(wait)})
             reserve_operation(self.db, uid, tx, now=now, access=access,
                               media_seconds=(old.get("media") or {}).get("duration_seconds", 0))
-            tx.update(doc, {"status": "queued", "updated_at": now})
-            tx.set(job, new_job(uid, ref_id, revision, now) | {"plan": access.plan})
-            return Reference.model_validate({**old, "status": "queued", "updated_at": now})
+            tx.update(doc, {"status": "queued", "updated_at": now, "media_incomplete": False,
+                            "fetch_retry_at": now})
+            tx.set(job, new_job(uid, ref_id, revision, now) | {"plan": access.plan, "scope": scope})
+            return Reference.model_validate({
+                **old, "status": "queued", "updated_at": now, "media_incomplete": False})
         return self.repo.transact(write)

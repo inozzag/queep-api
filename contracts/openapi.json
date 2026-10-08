@@ -177,6 +177,68 @@
         ]
       }
     },
+    "/v1/account/onboarding": {
+      "get": {
+        "summary": "Read Onboarding",
+        "operationId": "read_onboarding_v1_account_onboarding_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Write Onboarding",
+        "operationId": "write_onboarding_v1_account_onboarding_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/account": {
       "get": {
         "summary": "Account Status",
@@ -1044,6 +1106,16 @@
               "default": "gallery",
               "title": "Role"
             }
+          },
+          {
+            "name": "motion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Motion"
+            }
           }
         ],
         "responses": {
@@ -1054,7 +1126,8 @@
                 "schema": {}
               },
               "image/jpeg": {},
-              "image/png": {}
+              "image/png": {},
+              "video/mp4": {}
             }
           },
           "422": {
@@ -1173,6 +1246,16 @@
               "type": "boolean",
               "default": false,
               "title": "Thumbnail"
+            }
+          },
+          {
+            "name": "loop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Loop"
             }
           }
         ],
@@ -1695,10 +1778,16 @@
             "type": "string",
             "enum": [
               "photo",
-              "video"
+              "video",
+              "gif"
             ],
             "title": "Preview Kind",
             "default": "photo"
+          },
+          "motion": {
+            "type": "boolean",
+            "title": "Motion",
+            "default": false
           }
         },
         "type": "object",
@@ -1755,6 +1844,12 @@
             "type": "array",
             "maxItems": 20,
             "title": "Appearance"
+          },
+          "portrait": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Portrait",
+            "default": ""
           },
           "coverage": {
             "type": "string",
@@ -1856,6 +1951,11 @@
               }
             ],
             "title": "Height"
+          },
+          "loop": {
+            "type": "boolean",
+            "title": "Loop",
+            "default": false
           }
         },
         "type": "object",
@@ -1912,6 +2012,133 @@
         ],
         "title": "MetadataEdit",
         "description": "Title and notes of an uploaded image or media file; the file itself never changes."
+      },
+      "OnboardingProfile": {
+        "properties": {
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "anuncio",
+              "instagram",
+              "tiktok",
+              "twitter",
+              "youtube",
+              "google",
+              "linkedin",
+              "amigo",
+              "ai_chat",
+              "podcast",
+              "app_store"
+            ],
+            "title": "Source"
+          },
+          "work": {
+            "type": "string",
+            "enum": [
+              "design",
+              "marketing",
+              "conteudo",
+              "social",
+              "fotografia",
+              "publicidade",
+              "produto",
+              "empreendedor",
+              "educacao",
+              "outro"
+            ],
+            "title": "Work"
+          },
+          "work_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phone",
+          "source",
+          "work"
+        ],
+        "title": "OnboardingProfile",
+        "description": "Answers collected before the first save. The phone stays on the account document."
+      },
+      "OnboardingRecord": {
+        "properties": {
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "anuncio",
+              "instagram",
+              "tiktok",
+              "twitter",
+              "youtube",
+              "google",
+              "linkedin",
+              "amigo",
+              "ai_chat",
+              "podcast",
+              "app_store"
+            ],
+            "title": "Source"
+          },
+          "work": {
+            "type": "string",
+            "enum": [
+              "design",
+              "marketing",
+              "conteudo",
+              "social",
+              "fotografia",
+              "publicidade",
+              "produto",
+              "empreendedor",
+              "educacao",
+              "outro"
+            ],
+            "title": "Work"
+          },
+          "work_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Detail"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phone",
+          "source",
+          "work",
+          "completed_at"
+        ],
+        "title": "OnboardingRecord"
       },
       "Reference": {
         "properties": {
@@ -2068,6 +2295,11 @@
               }
             ],
             "title": "Transcript"
+          },
+          "media_incomplete": {
+            "type": "boolean",
+            "title": "Media Incomplete",
+            "default": false
           }
         },
         "type": "object",
@@ -2090,6 +2322,15 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Revision"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "fetch",
+              "analysis"
+            ],
+            "title": "Scope",
+            "default": "fetch"
           }
         },
         "additionalProperties": false,

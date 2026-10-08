@@ -316,6 +316,74 @@ def test_video_metadata_endpoint_contains_only_a_canonical_public_id(url):
     assert sources.social_endpoint(sources.checked_url("https://youtu.be/127.0.0.1")) is None
 
 
+def test_video_posters_keep_a_public_thumbnail_and_drop_a_private_one():
+    page = sources.checked_url("https://www.youtube.com/watch?v=M7lc1UVf-VE")
+    private = sources.video_posters(
+        b'{"title":"Native","author_name":"A",'
+        b'"thumbnail_url":"http://127.0.0.1/private.jpg"}',
+        page,
+    )
+    assert private == [{"url": "https://www.youtube.com/favicon.ico", "kind": "avatar"}]
+    public = sources.video_posters(
+        b'{"thumbnail_url":"https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"}',
+        page,
+    )
+    assert public[0] == {
+        "url": "https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg",
+        "kind": "video",
+    }
+    assert public[1] == {"url": "https://www.youtube.com/favicon.ico", "kind": "avatar"}
+    vimeo = sources.checked_url("https://vimeo.com/123")
+    assert sources.video_posters(b"{}", vimeo) == [
+        {"url": "https://vimeo.com/favicon.ico", "kind": "avatar"},
+    ]
+
+
+def test_fetch_returns_the_youtube_poster_and_avatar(monkeypatch):
+    body = (
+        b'{"title":"Demo","author_name":"Author",'
+        b'"thumbnail_url":"https://i.ytimg.com/vi/M7lc1UVf-VE/hqdefault.jpg"}'
+    )
+
+    async def fake(url):
+        return body, {"content-type": "application/json"}, url
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake)
+    source, previews = asyncio.run(sources.fetch("https://youtu.be/M7lc1UVf-VE"))
+    assert "Demo" in source.text and "capa" in source.limitations[0]
+    assert previews[0]["kind"] == "video" and previews[1]["kind"] == "avatar"
+
+
+def test_instagram_profile_page_supplies_a_missing_avatar(monkeypatch):
+    embed = (
+        b"<html><body>"
+        b'<img class="EmbeddedMediaImage" src="https://scontent.cdninstagram.com/a.jpg">'
+        b'<div class="Caption"><a class="CaptionUsername" '
+        b'href="https://www.instagram.com/nike/">nike</a>'
+        b"A public caption with enough words.</div></body></html>"
+    )
+    profile = (
+        b'<html><script>{"profile_pic_url":"https:\\/\\/scontent.cdninstagram.com\\/avatar.jpg"}'
+        b"</script></html>"
+    )
+    seen = []
+
+    async def fake(url):
+        seen.append(str(url))
+        body = profile if str(url).rstrip("/").endswith("/nike") else embed
+        return body, {"content-type": "text/html"}, url
+
+    monkeypatch.setattr(sources, "fetch_resolved_body", fake)
+    source, previews = asyncio.run(sources.fetch("https://www.instagram.com/p/CfwXgNprcSA/"))
+    assert source.author_handle == "nike"
+    assert previews[0] == {
+        "url": "https://scontent.cdninstagram.com/avatar.jpg",
+        "kind": "avatar",
+    }
+    assert previews[1]["kind"] == "photo"
+    assert seen[1] == "https://www.instagram.com/nike/"
+
+
 def test_metadata_does_not_fetch_embed_html_images_or_media():
     result = sources.video_metadata(
         b'{"title":"Native app demo","author_name":"Author",'
@@ -1541,6 +1609,61 @@ def test_dribbble_shot_stays_on_the_dribbble_reader(monkeypatch):
     assert seen and all("dribbble.com" in item for item in seen)
 
 
+def _instagram_gql_html(node):
+    inner = json.dumps(node, separators=(",", ":")).replace("/", r"\/")
+    return (
+        "<html><head><title>Instagram</title></head><body><script>"
+        + json.dumps({"gql_data": inner})
+        + "</script></body></html>"
+    ).encode()
+
+
+def test_instagram_escaped_gql_data_video_url_becomes_a_clip():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/reel/AbC_12/")
+    body = _instagram_gql_html({
+        "shortcode_media": {
+            "is_video": True,
+            "video_url": "https://scontent.cdninstagram.com/v/reel.mp4",
+            "display_url": "https://scontent.cdninstagram.com/poster.jpg",
+            "owner": {"username": "nike"},
+            "edge_media_to_caption": {
+                "edges": [{"node": {"text": "A caption long enough here"}}],
+            },
+        }
+    })
+    assert b"<video" not in body and b"video_url" in body
+    media = adapter.media(body, url, adapter.match(url))
+    video = next(item for item in media if item["kind"] == "video")
+    assert video["url"] == "https://scontent.cdninstagram.com/poster.jpg"
+    assert video["clip_url"] == "https://scontent.cdninstagram.com/v/reel.mp4"
+    parsed = adapter.parse(body, url, adapter.match(url))
+    assert parsed.author_handle == "nike" and "caption long enough" in parsed.text
+
+
+def test_instagram_gql_data_without_a_video_url_stays_a_poster():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/reel/AbC_12/")
+    body = _instagram_gql_html({
+        "shortcode_media": {
+            "is_video": True,
+            "display_url": "https://scontent.cdninstagram.com/poster.jpg",
+            "owner": {"username": "nike"},
+            "edge_media_to_caption": {
+                "edges": [{"node": {"text": "A caption long enough here"}}],
+            },
+        }
+    })
+    media = adapter.media(body, url, adapter.match(url))
+    video = next(item for item in media if item["kind"] == "video")
+    assert video["url"].endswith("poster.jpg")
+    assert "clip_url" not in video
+
+
 def test_instagram_embed_reads_caption_author_and_image():
     from queep.social.instagram import InstagramAdapter
 
@@ -1595,7 +1718,10 @@ def test_instagram_post_stops_at_the_embed_reader(monkeypatch):
     )
     assert source.author_handle == "nike" and "public caption" in source.text
     assert previews and previews[0]["kind"] == "photo"
-    assert seen == ["https://www.instagram.com/p/CfwXgNprcSA/embed/captioned/"]
+    assert seen == [
+        "https://www.instagram.com/p/CfwXgNprcSA/embed/captioned/",
+        "https://www.instagram.com/nike/",
+    ]
 
 
 def test_dribbble_waf_and_missing_page_are_not_a_shot():

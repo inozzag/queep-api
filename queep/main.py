@@ -420,7 +420,7 @@ def delete(ref_id: UUID, uid: UID, repo: Repo, media: Media,
 @app.post("/v1/references/{ref_id}/retry", response_model=Reference)
 def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: PaidUID,
                    background: BackgroundTasks):
-    reference = Jobs(database()).retry(uid, str(ref_id), capture.revision)
+    reference = Jobs(database()).retry(uid, str(ref_id), capture.revision, capture.scope)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 

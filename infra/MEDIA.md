@@ -3,8 +3,11 @@
 Arquivos de até **cinco minutos e 25 MiB preparados**. Os apps aceitam originais de
 até 150 MiB, exportam vídeo em 720p/H.264 ou áudio M4A e conferem o tamanho antes de
 enviar. A API aceita MP4/M4A, MP3 e WAV compatíveis; vídeo precisa ser H.264.
-Não há gravação de microfone nem importação de playlists. Vídeos sociais não ficam
-para reprodução; o worker só lê um trecho público limitado para fala e frames.
+Não há gravação de microfone nem importação de playlists. O mp4 original de um
+post não fica para reprodução. Quando a fonte publica um clipe, o worker guarda um
+loop mudo de até 8 s ao lado do pôster (`ImageInfo.motion`) e o app pede
+`GET /v1/references/{id}/image?motion=true`. Uploads usam `MediaInfo.loop` e
+`GET /media?loop=true`.
 
 ## Captura e processamento
 
@@ -42,14 +45,11 @@ sotaques, ruído, música, cenas rápidas e outros idiomas precisam de acervo ma
 
 | Fonte | O que pode ser lido nesta entrega |
 | --- | --- |
-| YouTube | Título e autor públicos via oEmbed, incluindo links curtos/Shorts reconhecidos. |
-| Vimeo | Título e autor públicos via oEmbed para links de vídeo reconhecidos. |
-| X / Twitter | Texto público do post, nome do autor, foto de perfil, fotos, GIFs
-  (como foto) e pôsteres de vídeo. Do primeiro vídeo, transcreve-se só a fala dos
-  15 s iniciais (música de fundo é descartada); o mp4 não fica para reprodução.
-  Áudio solto segue a mesma janela de 15 s e aparece no detalhe com player.
-  Respostas não entram. |
-| Instagram | Descrição pública quando acessível; login, bloqueios e ausência de texto preservam só o link. |
+| YouTube | Título, autor, pôster e ícone públicos via oEmbed, incluindo links curtos/Shorts. Sem arquivo de vídeo. |
+| Vimeo | Título, autor, pôster e ícone públicos via oEmbed para links de vídeo reconhecidos. Sem arquivo de vídeo. |
+| X / Twitter | Texto público do post, nome do autor, foto de perfil, fotos, GIFs e pôsteres de vídeo. Do primeiro vídeo, transcreve-se só a fala dos 15 s iniciais (música de fundo é descartada). O mp4 público vira o loop mudo de `motion`, não um arquivo solto. Áudio solto segue a mesma janela de 15 s e aparece no detalhe com player. Respostas não entram. |
+| Instagram | Descrição, pôster e avatar públicos quando a página os oferece. Um `video_url` escapado em `gql_data` vira o clipe do loop. Login e bloqueio preservam o link. |
+| Dribbble | Sem proxy. Um shot que a origem recusa continua indisponível. |
 
 Esses links têm cobertura parcial. O app mostra o material efetivamente lido e
 orienta enviar o arquivo para analisar fala/cenas. Não usa cookies da conta do
@@ -86,3 +86,18 @@ referência (`image`, `audio`, `video` ou `link`), `title`, `text`, `revision` e
 fila. Em post (`kind=link`), só o título muda e a análise não é reenfileirada.
 O mesmo `mutation_id` repetido devolve o mesmo resultado. Tipo diferente ou revisão
 desatualizada respondem 409. Cobertura em `tests/test_images.py` e `tests/test_media.py`.
+
+## Analisar de novo
+
+`POST /v1/references/{id}/retry` aceita `revision` e `scope`. O padrão é `fetch`.
+`analysis` usa o mesmo conjunto de aceitação e também reenfileira o worker, que
+hoje relê o link. Entra na fila quando o item está em `error`, com
+`media_incomplete`, com `source.state=unavailable`, ou com um slide `video`/`gif`
+sem `motion`. Revisão diferente ou item já `queued`/`processing` respondem 409.
+Cota diária ou uma nova tentativa do mesmo item em menos de 10 minutos respondem
+429 com `Retry-After`. Sucesso devolve a referência com `status=queued`.
+
+O lote correspondente é `python -m queep.reprocess` (plano seco por padrão).
+`--enqueue` só grava jobs se `--require-version` for a `ANALYSIS_VERSION` que o
+worker publicado serve. Não chama Cloud Tasks; o scheduler `queep-ai-dispatch`
+entrega a fila.

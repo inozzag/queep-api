@@ -223,6 +223,20 @@ def test_worker_routes_are_private_and_not_in_public_api():
     assert not any(path.startswith("/tasks") for path in public_app.openapi()["paths"])
 
 
+def test_checked_in_openapi_matches_the_app():
+    import json
+    from pathlib import Path
+
+    saved = json.loads(Path("contracts/openapi.json").read_text())
+    assert saved == public_app.openapi()
+    image = saved["components"]["schemas"]["ImageInfo"]["properties"]
+    assert image["preview_kind"]["enum"] == ["photo", "video", "gif"]
+    assert image["motion"]["default"] is False
+    retry = saved["components"]["schemas"]["RetryAnalysis"]["properties"]
+    assert retry["scope"]["default"] == "fetch"
+    assert "media_incomplete" in saved["components"]["schemas"]["Reference"]["properties"]
+
+
 def fake_client(value):
     calls, settled = [], []
     def respond(request):
@@ -938,6 +952,229 @@ def test_first_video_clip_speech_reaches_interpreter(library, monkeypatch):
     assert ("speech", b"mp3") in seen
     assert ("interpret", "fala do autor") in seen
     assert repo.get(uid, ref.id).transcript == "fala do autor"
+
+
+def test_public_clip_is_stored_as_muted_motion(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    poster = picture("blue")
+    loop = b"muted-loop" + b"\x00" * 64
+    stored_motion = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            stored_motion.append(motion)
+            return ImageInfo(
+                sha256="v" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind, motion=bool(motion),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: poster)
+    monkeypatch.setattr("queep.worker.read_social_clip", lambda _url: b"mp4-bytes")
+    monkeypatch.setattr("queep.worker.preview_loop", lambda _data: loop)
+    monkeypatch.setattr("queep.worker.social_evidence", lambda _data: SimpleNamespace(
+        audio=None, frames=[]))
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [{
+            "url": "https://pbs.twimg.com/ext_tw_video_thumb/poster.jpg",
+            "kind": "video",
+            "clip_url": "https://video.twimg.com/amplify_video/clip.mp4",
+        }]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert stored_motion == [loop]
+    assert repo.get(uid, ref.id).images[0].motion is True
+
+
+def _preview_store():
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            return ImageInfo(
+                sha256="a" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind, motion=bool(motion),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    return Photos()
+
+
+def test_swallowed_post_media_is_not_published_as_full_ready(library, monkeypatch):
+    from queep.sources import SourceError
+    from queep.worker import MISSED_POST_MEDIA
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+
+    def fail_photo(_url):
+        raise SourceError("http")
+
+    monkeypatch.setattr("queep.worker.read_photo", fail_photo)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/missing.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.status == "ready" and stored.media_incomplete is True
+    assert stored.analysis.coverage == "partial"
+    assert MISSED_POST_MEDIA in stored.analysis.limitations
+    assert stored.images is None
+
+
+def test_empty_read_is_flagged_without_calling_it_a_missed_photo(library):
+    from queep.worker import MISSED_POST_MEDIA
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://onepromptdesign.com"))
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="page", state="unavailable", url="https://onepromptdesign.com",
+            fetched_at=datetime.now(UTC), limitations=["A página não pôde ser lida."],
+        ), None
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.media_incomplete is True
+    assert stored.analysis.coverage == "full"
+    assert MISSED_POST_MEDIA not in stored.analysis.limitations
+
+
+def test_author_only_reel_is_flagged_and_a_caption_is_not(library):
+    repo, jobs, uid, _ = library
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+    bare = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://www.instagram.com/reel/AbC_12/"))
+
+    def empty(_url):
+        return SourceContent(
+            content_kind="metadata", state="read", url="https://www.instagram.com/reel/AbC_12/",
+            title="nike", text="", author_handle="nike", fetched_at=datetime.now(UTC),
+        ), None
+
+    assert process(task_for(repo, jobs, uid, bare), jobs, ai, _preview_store(), empty) == "ready"
+    assert repo.get(uid, bare.id).media_incomplete is True
+    caption = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://www.instagram.com/p/CfwXgNprcSA/"))
+
+    def text_only(_url):
+        return SourceContent(
+            content_kind="metadata", state="read",
+            url="https://www.instagram.com/p/CfwXgNprcSA/",
+            title="nike", text="A public caption with enough words.",
+            fetched_at=datetime.now(UTC),
+        ), None
+
+    assert process(
+        task_for(repo, jobs, uid, caption), jobs, ai, _preview_store(), text_only) == "ready"
+    assert repo.get(uid, caption.id).media_incomplete is False
+
+
+def test_retry_reprocesses_a_ready_gap_and_rejects_a_second_call(library, monkeypatch):
+    from queep.sources import SourceError
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    photo = picture()
+    failed = {"value": True}
+
+    def read_photo(_url):
+        if failed["value"]:
+            raise SourceError("http")
+        return photo
+
+    monkeypatch.setattr("queep.worker.read_photo", read_photo)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/one.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    assert repo.get(uid, ref.id).media_incomplete is True
+    retried = jobs.retry(uid, ref.id, 1)
+    assert retried.status == "queued" and retried.media_incomplete is False
+    assert repo.job(uid, ref.id).get().to_dict()["scope"] == "fetch"
+    with pytest.raises(HTTPException) as inflight:
+        jobs.retry(uid, ref.id, 1)
+    assert inflight.value.status_code == 409
+    failed["value"] = False
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.status == "ready" and stored.media_incomplete is False
+    assert stored.analysis.coverage == "full"
+
+
+def test_retry_accepts_unavailable_and_a_still_video_and_cools_down(library):
+    repo, jobs, uid, ref = library
+    publish(*library)
+    assert jobs.retry(uid, ref.id, 1).status == "ready"
+    site = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://saved.design/"))
+    work = jobs.claim(task_for(repo, jobs, uid, site))
+    assert jobs.finish(work, ANALYSIS, VECTOR, source=SourceContent(
+        content_kind="page", state="unavailable", url="https://saved.design/",
+        fetched_at=datetime.now(UTC),
+    ))
+    queued = jobs.retry(uid, site.id, 1, scope="analysis")
+    assert queued.status == "queued"
+    assert repo.job(uid, site.id).get().to_dict()["scope"] == "analysis"
+    repo.collection(uid).document(site.id).update({
+        "status": "ready", "media_incomplete": False,
+        "fetch_retry_at": datetime.now(UTC),
+        "images": [{
+            "sha256": "b" * 64, "content_type": "image/jpeg", "width": 10, "height": 10,
+            "byte_count": 10, "preview_kind": "video", "motion": False,
+        }],
+    })
+    with pytest.raises(HTTPException) as cooled:
+        jobs.retry(uid, site.id, 1)
+    assert cooled.value.status_code == 429
+    assert int(cooled.value.headers["Retry-After"]) >= 1
+    repo.collection(uid).document(site.id).update({
+        "fetch_retry_at": datetime.now(UTC) - timedelta(minutes=11),
+    })
+    assert jobs.retry(uid, site.id, 1).status == "queued"
+    with pytest.raises(HTTPException) as stale:
+        jobs.retry(uid, site.id, 2)
+    assert stale.value.status_code == 409
+
+
+def test_page_preview_failure_does_not_mark_the_post_media_gap(library, monkeypatch):
+    from queep.sources import SourceError
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://cursor.com"))
+
+    def fail(_url):
+        raise SourceError("http")
+
+    monkeypatch.setattr("queep.worker.read_public_image", fail)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="page", state="read", url="https://cursor.com", title="Cursor",
+            text="Editor de codigo.", fetched_at=datetime.now(UTC),
+        ), [{"url": "https://cursor.com/og.png", "kind": "photo"}]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.analysis.coverage == "full" and stored.media_incomplete is False
 
 
 @pytest.mark.parametrize("kind", ["link", "image"])

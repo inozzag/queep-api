@@ -72,6 +72,9 @@ class Interpretation(BaseModel):
     hook: str = Field(default="", max_length=240)
     style: str = Field(default="", max_length=240)
     transcript_summary: str = Field(default="", max_length=500)
+    # Optional so queep-interpretation-v8 can omit it; interpretation_schema()
+    # leaves it out of required.
+    portrait: str = Field(default="", max_length=500)
     coverage: Literal["full", "partial"]
     limitations: list[str] = Field(default_factory=list, max_length=20)
 
@@ -140,6 +143,8 @@ class Reference(BaseModel):
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)
+    # True when a link was published without the media or page the source offered.
+    media_incomplete: bool = False
 
 
 class Library(BaseModel):
@@ -175,6 +180,8 @@ class BatchArchive(BaseModel):
 class RetryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
+    # fetch is the button default. analysis uses the same acceptance set.
+    scope: Literal["fetch", "analysis"] = "fetch"
 
 
 _BR_AREA_CODES = {
