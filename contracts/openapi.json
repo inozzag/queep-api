@@ -53,7 +53,37 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Falha transitória. Tente novamente após Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos até repetir a leitura.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
               }
             }
           }
@@ -156,7 +186,37 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AccountStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Falha transitória. Tente novamente após Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos até repetir a leitura.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
               }
             }
           }
@@ -1282,6 +1342,19 @@
   },
   "components": {
     "schemas": {
+      "APIError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "APIError"
+      },
       "Access": {
         "properties": {
           "mode": {
@@ -1379,6 +1452,48 @@
           "version"
         ],
         "title": "AccountChange"
+      },
+      "AccountStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled",
+              "deleting",
+              "deleted"
+            ],
+            "title": "Status"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "delete_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delete At"
+          },
+          "can_restore": {
+            "type": "boolean",
+            "title": "Can Restore"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "delete_at",
+          "can_restore"
+        ],
+        "title": "AccountStatus"
       },
       "ArchiveEdit": {
         "properties": {
@@ -2232,6 +2347,56 @@
           "name"
         ],
         "title": "SpaceName"
+      },
+      "UsageCounter": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "limit"
+        ],
+        "title": "UsageCounter"
+      },
+      "UsageSnapshot": {
+        "properties": {
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "max"
+            ],
+            "title": "Plan"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Resets At"
+          },
+          "counters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UsageCounter"
+            },
+            "type": "object",
+            "title": "Counters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan",
+          "resets_at",
+          "counters"
+        ],
+        "title": "UsageSnapshot"
       },
       "ValidationError": {
         "properties": {
