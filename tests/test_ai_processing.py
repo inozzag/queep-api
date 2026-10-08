@@ -17,6 +17,7 @@ from queep.ai import (
     document,
     generated_title,
     headline_title,
+    select_vision_frames,
 )
 from queep.budget import Budget
 from queep.config import database
@@ -286,6 +287,38 @@ def test_checker_timeout_releases_the_budget_placeholder(library):
     assert settled[0][1] == 0.0
 
 
+def test_checker_provider_error_without_usage_releases_the_placeholder(library):
+    *_, ref = library
+
+    def post(_path, json, timeout):
+        raise httpx.ConnectError("down")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_unavailable"):
+        ai.verify("interface", [ref])
+    assert settled[0][1] == 0.0
+
+
+def test_checker_http_error_with_usage_keeps_the_reported_cost(library):
+    *_, ref = library
+
+    class Response:
+        is_error = True
+        status_code = 503
+
+        def json(self):
+            return {"error": {"message": "busy"}, "usage": {"cost": 0.002}}
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=lambda *_a, **_k: Response()))
+    with pytest.raises(AIError, match="provider_http_503"):
+        ai.verify("interface", [ref])
+    assert settled[0][1] == 0.002
+
+
 def test_provider_error_without_usage_keeps_the_placeholder():
     def post(_path, json, timeout):
         raise httpx.ConnectError("down")
@@ -296,6 +329,56 @@ def test_provider_error_without_usage_keeps_the_placeholder():
     with pytest.raises(AIError, match="provider_unavailable"):
         ai.embed("interface")
     assert settled[0][1] is None
+
+
+def test_vision_budget_reserves_room_for_clip_frames():
+    posters = [b"p1", b"p2", b"p3", b"p4"]
+    clips = [b"c1", b"c2", b"c3"]
+    assert select_vision_frames(posters, clips) == [b"p1", *clips]
+    assert select_vision_frames(posters, []) == posters
+    assert select_vision_frames([], clips) == clips
+    assert select_vision_frames(posters[:2], clips[:1]) == [b"p1", b"p2", b"c1"]
+    assert select_vision_frames(posters, [b"c"] * 5) == [b"c"] * 4
+
+
+def test_clip_frames_stay_in_the_vision_budget_after_posters(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    posters = [picture(color) for color in ("white", "red", "blue", "green")]
+    clips = [b"clip-frame-1", b"clip-frame-2", b"clip-frame-3"]
+    urls = [f"https://pbs.twimg.com/media/{index}.jpg" for index in range(4)]
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            return ImageInfo(
+                sha256="a" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind,
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda url: posters[urls.index(url)])
+    monkeypatch.setattr("queep.worker.read_social_clip", lambda _url: b"mp4")
+    monkeypatch.setattr("queep.worker.social_evidence", lambda _data: SimpleNamespace(
+        audio=None, frames=[(0.2, clips[0]), (0.5, clips[1]), (0.8, clips[2])]))
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(data) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            {"url": urls[0], "kind": "video",
+             "clip_url": "https://video.twimg.com/amplify_video/clip.mp4"},
+            *({"url": url, "kind": "photo"} for url in urls[1:]),
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert seen == [[posters[0], *clips]]
 
 
 def test_search_rejects_ids_outside_candidates(library):

@@ -12,7 +12,15 @@ from google.auth.transport.requests import Request
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
-from queep.ai import AI, AIError, document, generated_title, headline_title, without_product_prefix
+from queep.ai import (
+    AI,
+    AIError,
+    document,
+    generated_title,
+    headline_title,
+    select_vision_frames,
+    without_product_prefix,
+)
 from queep.budget import Budget
 from queep.config import Settings, database, firebase_app, image_bucket
 from queep.cost_context import attribution
@@ -182,7 +190,8 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
         data = images.read(work["uid"], ref.id)[0] if images and ref.kind == "image" else None
         if not jobs.current(work):
             return "stale"
-        frames = []
+        poster_frames = []
+        clip_frames = []
         page_preview = None
         missed_media = False
         profile = False
@@ -261,7 +270,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             if page_preview is None and kind == "photo":
                                 page_preview = photo
                         else:
-                            frames.append(photo)
+                            poster_frames.append(photo)
                     except Exception:
                         logger.warning("post_photo_skipped", extra={"count": len(infos)},
                                        exc_info=True)
@@ -275,7 +284,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                     clip = social_evidence(evidence_clip)
                     if not clip.frames and not clip.audio:
                         missed_media = True
-                    frames.extend(frame for _, frame in clip.frames)
+                    clip_frames.extend(frame for _, frame in clip.frames)
                     if clip.audio:
                         speech = ai.transcribe_speech(clip.audio)
                         if speech:
@@ -285,6 +294,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                     missed_media = True
             if not jobs.current(work):
                 return "stale"
+        frames = select_vision_frames(poster_frames, clip_frames)
         transcript = ref.transcript
         if ref.media:
             files = media or MediaFiles(images.db, images.bucket)
@@ -300,9 +310,12 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 limitations=["O perfil não tem bio pública para analisar."],
             )
         else:
-            vision = None if profile else (frames or data)
-            if page and page_preview and not profile:
-                vision = [page_preview]
+            if profile:
+                vision = None
+            elif page:
+                vision = [page_preview] if page_preview else None
+            else:
+                vision = frames or data
             analysis = ai.interpret(ref, vision)
         from queep.refetch import media_incomplete as incomplete_read
 

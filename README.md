@@ -37,7 +37,7 @@ Spaces pessoais, captura opcional, filtro e busca: [contrato e persistência](in
 - `DELETE /v1/references/{UUID}?revision=N`: exclui conteúdo e trabalho pendente; mantém só tombstone contra reenvios tardios.
 - `POST /v1/search`: `{ "query": "interfaces claras de CRM" }`; lista ordenada (até `candidate_limit`, hoje 60), com filtro de contradição só na cabeça. Sem inventar resultados fora do acervo.
 - Releitura v8 do acervo já salvo: `python -m queep.backfill` (dry-run por padrão). Comando, variáveis e custo em [AI.md](infra/AI.md).
-- `POST /v1/references/{UUID}/retry`: `{ "revision": N }`; nova tentativa para análise em erro.
+- `POST /v1/references/{UUID}/retry`: `{ "revision": N, "scope": "fetch" }`; nova tentativa para análise em erro, leitura incompleta (`media_incomplete`) ou pôster de vídeo sem motion. `scope` padrão é `fetch`. Análise pronta e completa não é reenfileirada.
 - `GET /v1/account`: estado, versão e prazo de exclusão da conta autenticada.
 - `POST /v1/account/deletion`: autenticação recente, operação/versão; agenda exclusão em 30 dias ou inicia imediatamente. `POST /v1/account/deletion/cancel` recupera antes do prazo. [Contrato, ativação e limites](infra/ACCOUNTS.md).
 

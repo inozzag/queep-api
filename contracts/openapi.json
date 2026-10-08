@@ -1845,6 +1845,54 @@
             "maxItems": 20,
             "title": "Appearance"
           },
+          "ui_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Ui Types"
+          },
+          "colors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Colors"
+          },
+          "brand": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Brand",
+            "default": ""
+          },
+          "on_screen_text": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "On Screen Text"
+          },
+          "hook": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Hook",
+            "default": ""
+          },
+          "style": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Style",
+            "default": ""
+          },
+          "transcript_summary": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Transcript Summary",
+            "default": ""
+          },
           "portrait": {
             "type": "string",
             "maxLength": 500,
@@ -2384,7 +2432,7 @@
           "candidate_limit": {
             "type": "integer",
             "title": "Candidate Limit",
-            "default": 10
+            "default": 60
           }
         },
         "type": "object",

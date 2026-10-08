@@ -19,13 +19,16 @@ from queep.textnorm import fold
 logger = logging.getLogger(__name__)
 SPACE = "gemini-embedding-2:768:document-v1"
 ANALYSIS_VERSION = "queep-interpretation-v8"
+# One paid vision call. Clip samples must fit here; they are not a fifth image.
+VISION_FRAME_LIMIT = 4
 INTERPRETER = {"id": "google/gemini-2.5-flash-lite", "provider": "google-vertex",
                "prompt": .1, "completion": .4, "reasoning": {"enabled": False}}
 VERIFIER = {"id": "google/gemini-3.1-flash-lite", "provider": "google-vertex/global",
             "prompt": .25, "completion": 1.5, "reasoning": {"effort": "minimal"}}
 # Successful checks on the owner library took 16–36s when the head was ~19.5 KB.
-# 20s is enough for a smaller head; a timeout still returns the ranked list and
-# releases the US$0.01 placeholder (cost 0, not a kept reservation).
+# 20s is enough for a smaller head. A provider error with no usage payload,
+# including a timeout, returns the ranked list and releases the US$0.01
+# placeholder (cost 0, not a kept reservation).
 CHECKER_TIMEOUT = 20
 CHECKER_BUDGET = 8000
 EMBEDDER = {"id": "google/gemini-embedding-2", "provider": "google-vertex/us",
@@ -101,6 +104,15 @@ class Transcription(BaseModel):
     transcript: str = Field(max_length=18000, description=(
         "Transcrição literal de toda a fala audível, no idioma original. "
         "Vazio somente quando não há fala identificável; nunca substituir por resumo."))
+
+
+def select_vision_frames(posters, clips, limit=VISION_FRAME_LIMIT):
+    """Keep clip samples inside the vision budget when posters would fill it."""
+    posters = [frame for frame in (posters or []) if frame]
+    clips = [frame for frame in (clips or []) if frame]
+    if len(clips) >= limit:
+        return clips[:limit]
+    return [*posters[: limit - len(clips)], *clips]
 
 
 def clip(text, byte_limit):
@@ -242,6 +254,27 @@ def source(reference):
     return raw
 
 
+def _usage_payload(response):
+    """Usage dict from an error body, or nothing when the provider sent no payload."""
+    try:
+        value = response.json()
+    except (ValueError, TypeError, AttributeError):
+        return False, {}, None
+    if not isinstance(value, dict) or not isinstance(value.get("usage"), dict):
+        return False, {}, None
+    usage = value["usage"]
+    raw_cost = usage.get("cost")
+    cost = None
+    if raw_cost is not None:
+        try:
+            raw_cost = float(raw_cost)
+        except (TypeError, ValueError):
+            raw_cost = None
+        if raw_cost is not None and math.isfinite(raw_cost) and raw_cost >= 0:
+            cost = raw_cost
+    return True, usage, cost
+
+
 class AI:
     def __init__(self, key, budget, client=None):
         self.budget = budget
@@ -258,11 +291,18 @@ class AI:
         }, **body}
         ticket = self.budget.reserve()
         start, cost, usage, status = time.monotonic(), None, {}, "error"
+        saw_usage = False
         timeout = timeout if timeout is not None else (
             90 if phase in ("media_interpretation", "interpretation", "video_visuals") else 35)
         try:
             response = self.client.post(path, json=body, timeout=timeout)
             if response.is_error:
+                if phase == "search_verification":
+                    saw_usage, usage, noted = _usage_payload(response)
+                    if saw_usage and noted is not None:
+                        cost = noted
+                    elif not saw_usage:
+                        cost = 0.0
                 raise AIError(f"provider_http_{response.status_code}")
             value = response.json()
             if not isinstance(value, dict) or value.get("error"):
@@ -270,6 +310,8 @@ class AI:
             raw_usage = value.get("usage")
             if raw_usage is not None and not isinstance(raw_usage, dict):
                 raise AIError("provider_usage")
+            if isinstance(raw_usage, dict):
+                saw_usage = True
             usage = raw_usage or {}
             raw_cost = usage.get("cost")
             if raw_cost is not None:
@@ -283,7 +325,13 @@ class AI:
             # placeholder; keeping it billed a full cent for a call that did not finish.
             status, cost = "timeout", 0.0
             raise AIError("provider_timeout") from exc
+        except AIError:
+            if phase == "search_verification" and not saw_usage:
+                cost = 0.0
+            raise
         except (httpx.HTTPError, ValueError, TypeError) as exc:
+            if phase == "search_verification" and not saw_usage:
+                cost = 0.0
             raise AIError("provider_unavailable") from exc
         finally:
             metadata = {"phase": phase, "model": model["id"], "status": status,
@@ -333,7 +381,7 @@ class AI:
             raw[key] = raw[key][:max(0, len(raw[key]) // 2)]
             raw["source_coverage"] = "partial"
         content = [{"type": "text", "text": json.dumps(raw, ensure_ascii=False)}]
-        for frame in frames[:4]:
+        for frame in frames[:VISION_FRAME_LIMIT]:
             encoded = encode_vision_frame(frame)
             if not encoded:
                 continue

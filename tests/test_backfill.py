@@ -228,3 +228,53 @@ def test_cli_dry_run_does_not_construct_a_paid_call(capsys):
 def test_reembed_and_enqueue_cannot_be_combined():
     with pytest.raises(SystemExit):
         parse_args(["--reembed-only", "--enqueue"])
+
+
+def test_enqueue_cli_requires_the_serving_version(capsys):
+    refused = main([
+        "--uid", "nobody", "--enqueue", "--require-version", "queep-interpretation-v6",
+    ])
+    assert refused == 2
+    err = capsys.readouterr().err
+    assert ANALYSIS_VERSION in err
+    assert main(["--uid", "nobody", "--enqueue"]) == 2
+
+
+def test_fetch_scope_uses_classify_and_skips_a_complete_note(capsys):
+    repo, uid = Repository(database()), uuid4().hex
+    note = _ready(repo, uid)
+    broken = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://example.com/broken"))
+    repo.collection(uid).document(broken.id).update({"status": "error"})
+    dribbble = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://dribbble.com/shots/1"))
+    repo.collection(uid).document(dribbble.id).update({
+        "status": "ready",
+        "images": [{
+            "sha256": "c" * 64, "content_type": "image/jpeg", "width": 10, "height": 10,
+            "byte_count": 10, "preview_kind": "video", "motion": False,
+        }],
+    })
+    assert main([
+        "--uid", uid, "--scope", "fetch", "--exclude-host", "dribbble.com", "--rate", "0",
+    ]) == 0
+    output = capsys.readouterr().out
+    assert broken.id in output
+    assert "coorte=error" in output
+    assert note not in output
+    assert dribbble.id not in output
+
+
+def test_fetch_enqueue_requires_v8_and_marks_scope(capsys):
+    repo, uid = Repository(database()), uuid4().hex
+    broken = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://example.com/broken"))
+    repo.collection(uid).document(broken.id).update({"status": "error"})
+    repo.job(uid, broken.id).delete()
+    assert main([
+        "--uid", uid, "--scope", "fetch", "--enqueue", "--require-version", ANALYSIS_VERSION,
+        "--rate", "0",
+    ]) == 0
+    assert "modo: enqueue" in capsys.readouterr().out
+    job = repo.job(uid, broken.id).get().to_dict()
+    assert job["scope"] == "fetch"
+    assert job["reason"] == ANALYSIS_VERSION
+    assert repo.collection(uid).document(broken.id).get().to_dict()["status"] == "queued"

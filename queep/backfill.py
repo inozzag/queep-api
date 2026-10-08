@@ -24,7 +24,10 @@ from google.cloud.firestore_v1.vector import Vector
 from queep.ai import ANALYSIS_VERSION, INTERPRETER, SPACE, AIError, document
 from queep.budget import Budget
 from queep.models import Interpretation, Reference
+from queep.refetch import classify
 from queep.repository import Repository, new_job
+from queep.reprocess import provider_usd as fetch_provider_usd
+from queep.reprocess import reserve_usd as fetch_reserve_usd
 
 logger = logging.getLogger("queep.backfill")
 
@@ -127,29 +130,46 @@ class Backfill:
         return float(data.get("used") or 0.0)
 
     def run(self, *, uid=None, limit=None, force=False, reembed_only=False,
-            max_cost_usd=DEFAULT_MAX_COST_USD, mode="dry-run", action=None):
+            max_cost_usd=DEFAULT_MAX_COST_USD, mode="dry-run", action=None,
+            scope="analysis", exclude_hosts=()):
         if mode not in {"dry-run", "apply", "enqueue"}:
             raise ValueError("mode")
+        if scope not in {"analysis", "fetch"}:
+            raise ValueError("scope")
         action = action or ("reembed" if reembed_only else "reanalyze")
         if action not in {"reanalyze", "reembed", "enqueue"}:
             raise ValueError("action")
         reembed_only = action == "reembed"
         if reembed_only and mode == "enqueue":
             raise ValueError("reembed-only does not enqueue; the worker always re-analyzes")
+        if scope == "fetch" and reembed_only:
+            raise ValueError("fetch scope re-reads the source; it does not re-embed")
         skipped = {}
         planned = []
         for owner, record in self._rows(uid):
-            reason = skip_reason(record, force=force, reembed_only=reembed_only)
-            if reason:
-                skipped[reason] = skipped.get(reason, 0) + 1
-                continue
+            cohort = None
+            if scope == "fetch":
+                cohort = classify(record, exclude_hosts)
+                if not cohort:
+                    skipped["not-fetch"] = skipped.get("not-fetch", 0) + 1
+                    continue
+                item_provider = fetch_provider_usd(record)
+                item_reserve = fetch_reserve_usd(record)
+            else:
+                reason = skip_reason(record, force=force, reembed_only=reembed_only)
+                if reason:
+                    skipped[reason] = skipped.get(reason, 0) + 1
+                    continue
+                item_provider = provider_usd(record, reembed_only)
+                item_reserve = reserve_usd(record, reembed_only)
             planned.append({
                 "uid": owner,
                 "id": record["id"],
                 "action": action,
                 "analysis_version": _version(record),
-                "provider_usd": provider_usd(record, reembed_only),
-                "reserve_usd": reserve_usd(record, reembed_only),
+                "provider_usd": item_provider,
+                "reserve_usd": item_reserve,
+                "cohort": cohort,
                 "record": record,
             })
             if limit is not None and len(planned) >= limit:
@@ -159,7 +179,8 @@ class Backfill:
         completed, failed = [], []
         if mode != "dry-run":
             for item in selected:
-                outcome = self._execute(item, reembed_only=reembed_only, mode=mode)
+                outcome = self._execute(
+                    item, reembed_only=reembed_only, mode=mode, scope=scope)
                 if outcome == "budget":
                     stopped = "budget"
                     break
@@ -185,11 +206,11 @@ class Backfill:
             "max_cost_usd": max_cost_usd,
         }
 
-    def _execute(self, item, *, reembed_only, mode):
+    def _execute(self, item, *, reembed_only, mode, scope="analysis"):
         record = item["record"]
         try:
             if mode == "enqueue":
-                self._enqueue(item["uid"], record)
+                self._enqueue(item["uid"], record, scope=scope)
                 logger.info("backfill uid=%s id=%s action=enqueue result=ok",
                             item["uid"], item["id"])
                 return "ok"
@@ -235,7 +256,7 @@ class Backfill:
             })
         self.repo.collection(uid).document(record["id"]).update(payload)
 
-    def _enqueue(self, uid, record):
+    def _enqueue(self, uid, record, *, scope="analysis"):
         now = self.now()
         job = self.repo.job(uid, record["id"])
         existing = job.get()
@@ -243,10 +264,14 @@ class Backfill:
             state = (existing.to_dict() or {}).get("state")
             if state in {"pending", "processing"}:
                 raise ValueError("already-queued")
-        self.repo.collection(uid).document(record["id"]).update(
-            {"status": "queued", "updated_at": now})
-        job.set(new_job(uid, record["id"], record["revision"], now) | {
-            "plan": "backfill", "reason": ANALYSIS_VERSION})
+        changes = {"status": "queued", "updated_at": now}
+        extra = {"plan": "backfill", "reason": ANALYSIS_VERSION}
+        if scope == "fetch":
+            changes["media_incomplete"] = False
+            changes["fetch_retry_at"] = now
+            extra["scope"] = "fetch"
+        self.repo.collection(uid).document(record["id"]).update(changes)
+        job.set(new_job(uid, record["id"], record["revision"], now) | extra)
 
 
 def _fit(planned, max_cost, remaining):
@@ -267,8 +292,11 @@ def _fit(planned, max_cost, remaining):
 
 
 def _public(item):
-    return {key: item[key] for key in
-            ("uid", "id", "action", "analysis_version", "provider_usd", "reserve_usd")}
+    public = {key: item[key] for key in
+              ("uid", "id", "action", "analysis_version", "provider_usd", "reserve_usd")}
+    if item.get("cohort"):
+        public["cohort"] = item["cohort"]
+    return public
 
 
 def format_report(result):
@@ -289,8 +317,9 @@ def format_report(result):
                                     sorted(result["skipped"].items())) or "0"),
     ]
     for item in result["selected"]:
+        cohort = f" coorte={item['cohort']}" if item.get("cohort") else ""
         lines.append(
-            f"- {item['uid']} {item['id']} {item['action']} "
+            f"- {item['uid']} {item['id']} {item['action']}{cohort} "
             f"versão={item['analysis_version'] or 'nenhuma'} "
             f"US$ {item['provider_usd']:.4f}")
     for item in result["failed"]:
@@ -312,6 +341,12 @@ def parse_args(argv):
                         help="Imprime o plano mesmo se --apply ou --enqueue estiver presente.")
     parser.add_argument("--enqueue", action="store_true",
                         help="Grava jobs no outbox para o worker publicado reprocessar.")
+    parser.add_argument("--scope", default="analysis", choices=["analysis", "fetch"],
+                        help="analysis relê a versão. fetch usa queep.refetch.classify.")
+    parser.add_argument("--require-version", default=None,
+                        help="Obrigatório com --enqueue. Tem de ser a versão servida.")
+    parser.add_argument("--exclude-host", action="append", default=[],
+                        help="Host fora do --scope fetch. Pode repetir.")
     parser.add_argument("--max-cost-usd", type=float, default=DEFAULT_MAX_COST_USD)
     parser.add_argument("--daily-budget-usd", type=float, default=None,
                         help="Teto do ai_budget. Padrão: QUEEP_AI_DAILY_BUDGET_USD.")
@@ -324,12 +359,20 @@ def parse_args(argv):
         parser.error("--max-cost-usd must be >= 0")
     if args.reembed_only and args.enqueue:
         parser.error("--reembed-only cannot be combined with --enqueue")
+    if args.scope == "fetch" and args.reembed_only:
+        parser.error("--scope fetch cannot be combined with --reembed-only")
     return args
 
 
 def main(argv=None):
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = parse_args(argv)
+    if args.enqueue and args.require_version != ANALYSIS_VERSION:
+        print(
+            "--require-version must equal the serving worker " + ANALYSIS_VERSION,
+            file=sys.stderr,
+        )
+        return 2
     from queep.ai import AI
     from queep.config import Settings, database
 
@@ -357,7 +400,8 @@ def main(argv=None):
     daily = settings.ai_daily_budget if args.daily_budget_usd is None else args.daily_budget_usd
     result = Backfill(db, ai, rate=args.rate, daily_limit=daily).run(
         uid=args.uid, limit=args.limit, force=args.force, reembed_only=args.reembed_only,
-        max_cost_usd=args.max_cost_usd, mode=mode, action=action)
+        max_cost_usd=args.max_cost_usd, mode=mode, action=action, scope=args.scope,
+        exclude_hosts=tuple(args.exclude_host))
     print(format_report(result))
     return 0
 

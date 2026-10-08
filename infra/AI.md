@@ -6,7 +6,8 @@ Captura confirma conteúdo/outbox → Cloud Tasks → `queep-worker` privado →
 vetor publicados na revisão atual. Dispatcher agendado a cada minuto recupera falhas
 de envio. Jobs usam lease de 360 s, até 3 tentativas e identificadores diferentes por
 execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição/exclusão
-invalida o processamento anterior. O botão de nova tentativa abre outra execução.
+invalida o processamento anterior. O botão de nova tentativa abre outra execução,
+também quando o post ficou pronto sem a foto ou o clipe que a fonte ofereceu.
 
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
 embeddings. Ordena o acervo ativo já carregado (vetor fundido com palavra-chave e sinônimos PT/EN) e devolve uma janela (teto 60,
@@ -18,7 +19,8 @@ biblioteca inteira. A conferência roda só na cabeça (6 itens, até 8 KB, time
 de 20 s). O modelo devolve índices curtos (`[0,2,5]`), não UUIDs, em JSON compacto,
 com teto de 300 tokens. Ela só tira contradição explícita; o restante volta sem passar pelo modelo.
 Se a conferência falha ou estoura o tempo, a lista ordenada volta mesmo assim, a
-busca mensal não é debitada e o tempo esgotado não segura a reserva de US$ 0,01. Revalida revisões e exclusões antes de
+busca mensal não é debitada e qualquer erro do provedor sem payload de uso
+libera a reserva de US$ 0,01 (não só o tempo esgotado). Revalida revisões e exclusões antes de
 responder. Consultas usam POST para não expor o texto em URLs.
 O verificador informa também se a consulta exige um formato (`requested_kind`). A
 API confere os tipos reais antes de devolver os IDs da cabeça; um pedido explícito
@@ -46,7 +48,9 @@ São controles conservadores, não um teto de faturamento Firebase. Há também 
 de 100 buscas/conta/dia e intervalo mínimo de 1 s. Registros de custo não incluem
 conteúdo; `ai_calls` expira por TTL após 30 dias. Chave OpenRouter tem limite próprio.
 
-Imagens são reduzidas a 1536 px para interpretação. Fotos e pôsteres de vídeo
+Imagens são reduzidas a 1536 px para interpretação. Até quatro imagens seguem juntas
+para o modelo; amostras do clipe ocupam vagas desse teto e não ficam depois dos
+pôsteres. Fotos e pôsteres de vídeo
 anexados a um post social seguem o mesmo caminho, mesmo quando o texto do post
 não pôde ser lido: entram na interpretação, no documento vetorial e na conferência
 da busca. O arquivo de vídeo do post no X não é baixado. Sites enviam a imagem
@@ -77,8 +81,15 @@ uv run --env-file .env.evaluation python -m queep.backfill --uid UID --reembed-o
 
 # enfileira no worker já publicado. A coleção é QUEEP_JOB_COLLECTION
 # (jobs no dev, jobs_testflight no TestFlight). O worker relê a página,
-# manda a imagem de preview e publica a v8. --enqueue --dry-run só mostra.
-uv run --env-file .env.evaluation python -m queep.backfill --uid UID --enqueue
+# manda a imagem de preview e publica a v8. --enqueue exige --require-version
+# igual à ANALYSIS_VERSION servida. --enqueue --dry-run só mostra.
+uv run --env-file .env.evaluation python -m queep.backfill \
+  --uid UID --enqueue --require-version queep-interpretation-v8
+
+# coortes de fetch (erro, site vazio, reel só com autor, pôster sem motion).
+# A seleção é queep.refetch.classify, a mesma de python -m queep.reprocess.
+uv run --env-file .env.evaluation python -m queep.backfill \
+  --uid UID --scope fetch --exclude-host dribbble.com
 ```
 
 Variáveis: `QUEEP_ENV=production`, `GOOGLE_CLOUD_PROJECT=queep-dev-hstlx`,
