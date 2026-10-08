@@ -24,6 +24,7 @@ from queep.usage import check_inventory, inventory, policy
 MAX_BYTES = 12 * 1024 * 1024
 MAX_PIXELS = 20_000_000
 MAX_GALLERY = 4
+_KIND_RANK = {"photo": 0, "gif": 1, "video": 1}
 CARD_EDGE = 1440
 SHARP_EDGE = 800
 Image.MAX_IMAGE_PIXELS = MAX_PIXELS
@@ -34,6 +35,18 @@ _preview_slots = threading.BoundedSemaphore(2)
 _byte_cache: OrderedDict[str, bytes] = OrderedDict()
 _BYTE_BUDGET = 48 * 1024 * 1024
 STORED_OBJECTS = ("original", "thumbnail", "card", "motion", "loop")
+
+
+def richer_preview(current, incoming):
+    """Replace a stored still when the same bytes now have motion or a video kind."""
+    if not isinstance(current, dict):
+        return None
+    current_kind = current.get("preview_kind") or "photo"
+    motion_up = bool(incoming.motion) and not current.get("motion")
+    kind_up = _KIND_RANK.get(incoming.preview_kind, 0) > _KIND_RANK.get(current_kind, 0)
+    if not motion_up and not kind_up:
+        return None
+    return {**current, **incoming.model_dump()}
 
 
 @dataclass
@@ -398,9 +411,15 @@ class Images:
             gallery = list(record.get("images") or [])
             if not gallery and record.get("image"):
                 gallery = [record["image"]]
-            for item in gallery:
-                if item.get("sha256") == image.info.sha256:
+            for index, item in enumerate(gallery):
+                if item.get("sha256") != image.info.sha256:
+                    continue
+                upgraded = richer_preview(item, info)
+                if upgraded is None:
                     return ImageInfo.model_validate(item)
+                gallery[index] = upgraded
+                tx.update(doc, {"image": gallery[0], "images": gallery, "updated_at": now})
+                return ImageInfo.model_validate(upgraded)
             if len(gallery) >= MAX_GALLERY:
                 return ImageInfo.model_validate(gallery[-1])
             gallery.append(info.model_dump())
