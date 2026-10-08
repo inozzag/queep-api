@@ -43,7 +43,7 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     except AIError:
         _release(ai, uid, token)
         raise
-    ranked = order_ready(records, vector)
+    ranked = order_ready(records, vector, query)
     # Resolve current revisions both before the checker and before returning.
     candidates = current_references(
         repo, uid, [Reference.model_validate(item) for item in ranked], space_id)

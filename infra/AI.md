@@ -9,7 +9,7 @@ execução/revisão. Reenvio de tarefa não repete trabalho concluído; edição
 invalida o processamento anterior. O botão de nova tentativa abre outra execução.
 
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
-embeddings. Ordena o acervo ativo já carregado e devolve uma janela (teto 60,
+embeddings. Ordena o acervo ativo já carregado (vetor fundido com palavra-chave) e devolve uma janela (teto 60,
 `candidate_limit` na resposta; o cliente que limitar a grade por esse campo passa a
 mostrar a lista maior). Um corte de cauda relativo ao melhor score mantém no mínimo
 12 itens quando a biblioteca tem esse tanto. A conferência roda só na cabeça (8

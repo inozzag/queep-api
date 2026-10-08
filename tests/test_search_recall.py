@@ -9,7 +9,7 @@ from google.cloud.firestore_v1.vector import Vector
 from queep.ai import SPACE
 from queep.config import database
 from queep.models import Interpretation
-from queep.ranking import HEAD_LIMIT, MIN_RESULTS, contradicting_ids
+from queep.ranking import HEAD_LIMIT, MIN_RESULTS, bm25_ranks, contradicting_ids, order_ready
 from queep.repository import Repository
 from queep.search import search
 
@@ -76,14 +76,14 @@ def test_checker_subset_does_not_hide_the_unverified_tail():
 
 def test_tail_cut_keeps_the_minimum_when_scores_fall_off():
     repo, uid = Repository(database()), uuid4().hex
-    put_ready(repo, uid, "best", QUERY)
+    put_ready(repo, uid, "best", QUERY, summary="Landing roxa", appearance=["fundo roxo"])
     for index in range(15):
-        put_ready(repo, uid, f"weak-{index:02d}", _weak())
+        put_ready(repo, uid, f"weak-{index:02d}", _weak(), summary="Paisagem sem termo")
 
     def verify(_query, refs):
         return [ref.id for ref in refs]
 
-    result = _search(repo, uid, "interface", verify)
+    result = _search(repo, uid, "roxo", verify)
     assert [item.id for item in result.items][0] == "best"
     assert len(result.items) == MIN_RESULTS
 
@@ -137,3 +137,43 @@ def test_color_contradiction_is_local_and_ignores_items_without_a_color():
     ])
     assert dropped == ["purple"]
 
+
+def _record(identifier, vector, **fields):
+    analysis = fields.pop("analysis", {})
+    source = fields.pop("source", None)
+    record = {"id": identifier, "embedding": vector, "analysis": analysis, "archived_at": None,
+              "title": "", "text": ""}
+    record.update(fields)
+    if source is not None:
+        record["source"] = source
+    return record
+
+
+def test_appearance_color_outranks_a_closer_vector():
+    purple = _record(
+        "purple", _weak(), analysis={"appearance": ["fundo roxo"], "summary": "Landing"})
+    closer = _record("closer", QUERY, analysis={"summary": "Outra página sem a cor"})
+    ordered = [item["id"] for item in order_ready([closer, purple], QUERY, "roxo")]
+    assert ordered[0] == "purple"
+
+
+def test_caption_term_is_found_and_weighs_less_than_the_title():
+    titled = _record("titled", _weak(), title="Paywall do app")
+    caption = _record(
+        "caption", _weak(), source={"text": "The screen is a paywall after onboarding"})
+    noise = _record("noise", QUERY, analysis={"summary": "Paisagem"})
+    ranks = bm25_ranks([titled, caption, noise], "paywall")
+    assert ranks[0] == "titled" and "caption" in ranks and "noise" not in ranks
+    fused = [item["id"] for item in order_ready([noise, caption], QUERY, "paywall")]
+    assert fused[0] == "caption"
+
+
+def test_short_tokens_accents_and_plurals_match():
+    rows = [
+        _record("web", _weak(), analysis={"topics": ["web design"]}),
+        _record("sites", _weak(), title="Websites for brands"),
+        _record("purple", _weak(), analysis={"appearance": ["Roxo intenso"]}),
+    ]
+    assert bm25_ranks(rows, "web")[0] == "web"
+    assert "sites" in bm25_ranks(rows, "website")
+    assert bm25_ranks(rows, "roxó") == ["purple"]

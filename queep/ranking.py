@@ -3,7 +3,7 @@
 import math
 import re
 
-from queep.textnorm import fold
+from queep.textnorm import fold, tokenize
 
 # Window returned to the client. Inside the 40–80 target; raise after eval/recall.py.
 RESULT_LIMIT = 60
@@ -14,6 +14,33 @@ HEAD_LIMIT = 8
 # Keep a hit when its score is at least (1 - gap) times the best score.
 # Wide on purpose: reciprocal-rank scores decay slowly. Calibrate with eval/recall.py.
 TAIL_RELATIVE_GAP = 0.55
+RRF_K = 60
+VECTOR_WEIGHT = 1.0
+KEYWORD_WEIGHT = 1.25
+EXPANSION_WEIGHT = 0.70
+BM25_K1 = 1.2
+BM25_B = 0.75
+# source text and transcript carry scraped chrome ("Log in Sign up"), so they weigh less.
+FIELD_WEIGHTS = {
+    "title": 2.2,
+    "text": 1.6,
+    "summary": 1.5,
+    "headline": 1.8,
+    "topics": 1.7,
+    "entities": 1.2,
+    "appearance": 1.8,
+    "usefulness": 0.6,
+    "ui_types": 1.9,
+    "colors": 2.0,
+    "brand": 1.5,
+    "on_screen_text": 1.4,
+    "hook": 1.4,
+    "style": 1.1,
+    "transcript_summary": 1.0,
+    "source_text": 0.35,
+    "transcript": 0.35,
+}
+
 COLOR_FAMILIES = {
     "roxo": ("roxo", "roxa", "roxos", "roxas", "purple", "violeta", "violet", "lilas", "lilac"),
     "verde": ("verde", "verdes", "green"),
@@ -88,9 +115,121 @@ def vector_order(records, vector):
     return scored
 
 
+def _analysis(record):
+    analysis = record.get("analysis") or {}
+    return analysis if isinstance(analysis, dict) else {}
 
-def order_ready(records, vector):
-    return [item[2] for item in cut_tail(vector_order(records, vector))]
+
+def _join(value):
+    if isinstance(value, list):
+        return " ".join(str(item) for item in value if item)
+    return str(value or "")
+
+
+def field_text(record):
+    analysis = _analysis(record)
+    source = record.get("source") or {}
+    if not isinstance(source, dict):
+        source = {}
+    return {
+        "title": record.get("title") or "",
+        "text": record.get("text") or "",
+        "summary": analysis.get("summary") or "",
+        "headline": analysis.get("headline") or "",
+        "topics": _join(analysis.get("topics")),
+        "entities": _join(analysis.get("entities")),
+        "appearance": _join(analysis.get("appearance")),
+        "usefulness": _join(analysis.get("usefulness")),
+        "ui_types": _join(analysis.get("ui_types")),
+        "colors": _join(analysis.get("colors")),
+        "brand": analysis.get("brand") or "",
+        "on_screen_text": _join(analysis.get("on_screen_text")),
+        "hook": analysis.get("hook") or "",
+        "style": analysis.get("style") or "",
+        "transcript_summary": analysis.get("transcript_summary") or "",
+        "source_text": source.get("text") or "",
+        "transcript": record.get("transcript") or "",
+    }
+
+
+def _weighted_tokens(record):
+    counts = {}
+    for name, text in field_text(record).items():
+        weight = FIELD_WEIGHTS.get(name, 1.0)
+        for token in tokenize(text):
+            counts[token] = counts.get(token, 0.0) + weight
+    return counts
+
+
+def bm25_ranks(records, query):
+    """Best-first ids with a positive score. Items that miss every term stay out."""
+    tokens = tokenize(query)
+    if not tokens or not records:
+        return []
+    docs = []
+    for index, record in enumerate(records):
+        identifier = record.get("id") or ""
+        if identifier:
+            docs.append((index, identifier, _weighted_tokens(record)))
+    if not docs:
+        return []
+    average = sum(sum(counts.values()) for _, _, counts in docs) / len(docs) or 1.0
+    document_frequency = {
+        token: sum(1 for _, _, counts in docs if counts.get(token, 0) > 0) for token in set(tokens)
+    }
+    scored = []
+    for index, identifier, counts in docs:
+        score = 0.0
+        length = sum(counts.values()) or 1.0
+        for token in tokens:
+            frequency = counts.get(token, 0.0)
+            if frequency <= 0:
+                continue
+            df = document_frequency[token]
+            idf = math.log(1 + (len(docs) - df + 0.5) / (df + 0.5))
+            numerator = frequency * (BM25_K1 + 1)
+            denominator = frequency + BM25_K1 * (1 - BM25_B + BM25_B * length / average)
+            score += idf * numerator / denominator
+        if score > 0:
+            # Equal keyword scores keep the incoming order (vector rank).
+            scored.append((score, index, identifier))
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [identifier for _, _, identifier in scored]
+
+
+def _rrf(rank_lists, weights):
+    scores = {}
+    for weight, ranking in zip(weights, rank_lists, strict=True):
+        if weight <= 0:
+            continue
+        for rank, identifier in enumerate(ranking, start=1):
+            scores[identifier] = scores.get(identifier, 0.0) + weight / (RRF_K + rank)
+    return scores
+
+
+def fuse_order(records, vector, query, expansions=()):
+    """Reciprocal rank fusion of the vector list with keyword and expansion lists."""
+    vectors = vector_order(records, vector)
+    by_id = {item[1]: item[2] for item in vectors}
+    vector_ids = [item[1] for item in vectors]
+    active = [item[2] for item in vectors]
+    keyword_ids = bm25_ranks(active, query) if query else []
+    expansion_ids = bm25_ranks(active, " ".join(expansions)) if expansions else []
+    fused = _rrf(
+        [vector_ids, keyword_ids, expansion_ids],
+        [VECTOR_WEIGHT, KEYWORD_WEIGHT if keyword_ids else 0.0,
+         EXPANSION_WEIGHT if expansion_ids else 0.0],
+    )
+    scored = [(fused.get(identifier, 0.0), identifier, by_id[identifier])
+              for identifier in vector_ids]
+    scored.sort(key=lambda item: (-item[0], item[1]))
+    return [item[2] for item in cut_tail(scored)]
+
+
+def order_ready(records, vector, query="", expansions=()):
+    if not (query or expansions):
+        return [item[2] for item in cut_tail(vector_order(records, vector))]
+    return fuse_order(records, vector, query, expansions)
 
 
 def _blob(reference):
