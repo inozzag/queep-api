@@ -8,7 +8,16 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, SPACE, AIError, document, generated_title, headline_title
+from queep.ai import (
+    AI,
+    CHECKER_BUDGET,
+    CHECKER_TIMEOUT,
+    SPACE,
+    AIError,
+    document,
+    generated_title,
+    headline_title,
+)
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
@@ -246,10 +255,39 @@ def test_partial_link_does_not_invent_or_fetch_site(library):
     assert result.limitations and not result.usefulness and not calls
 
 
+def test_checker_timeout_releases_the_budget_placeholder(library):
+    *_, ref = library
+    seen = {}
+
+    def post(_path, json, timeout):
+        seen["timeout"] = timeout
+        raise httpx.ReadTimeout("slow checker")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_timeout"):
+        ai.verify("interface", [ref])
+    assert seen["timeout"] == CHECKER_TIMEOUT == 20
+    assert settled[0][1] == 0.0
+
+
+def test_provider_error_without_usage_keeps_the_placeholder():
+    def post(_path, json, timeout):
+        raise httpx.ConnectError("down")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_unavailable"):
+        ai.embed("interface")
+    assert settled[0][1] is None
+
+
 def test_search_rejects_ids_outside_candidates(library):
     *_, ref = library
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [str(uuid4())]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [4]})}}]})
     with pytest.raises(AIError, match="invalid_selection"):
         ai.verify("CRM", [ref])
 
@@ -259,7 +297,7 @@ def test_explicit_media_kind_rejects_inconsistent_model_selection(library):
     audio = ref.model_copy(update={"id": "audio", "kind": "audio"})
     video = ref.model_copy(update={"id": "video", "kind": "video"})
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "video", "ids": ["audio", "video"]})}}]})
+        "content": json.dumps({"requested_kind": "video", "indices": [0, 1]})}}]})
     assert ai.verify("Vídeos sobre esta ferramenta", [audio, video]) == ["video"]
 
 
@@ -292,7 +330,7 @@ def test_link_content_reaches_ai_embedding_verification_and_persistence(library)
     assert "synchronous and async" in calls[0]["messages"][1]["content"][0]["text"]
     assert "synchronous and async" in documents[0]
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("Cliente HTTP Python assíncrono", [current]) == [current.id]
     assert "synchronous and async" in requests[0]["messages"][1]["content"]
     assert json.loads(requests[0]["messages"][1]["content"])["candidates"][0]["kind"] == "link"
@@ -809,7 +847,7 @@ def test_post_visuals_reach_embedding_and_verification(library, monkeypatch):
     stored = repo.get(uid, ref.id)
     assert stored.title == "Mesa mixer faders coloridos"
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [stored.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("mesa de mixer com faders", [stored]) == [stored.id]
     candidate = json.loads(requests[0]["messages"][1]["content"])["candidates"][0]
     assert candidate["image_description"]["appearance"] == ["mesa de som digital",
@@ -913,10 +951,40 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
                                  "url": "https://example.com/" + "x" * 2000,
                                  "analysis": analysis}) for _ in range(10)]
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": '{"requested_kind":"any","ids":[]}'}}]})
+        "content": '{"requested_kind":"any","indices":[]}'}}]})
     assert ai.verify("Encontre uma referência", refs) == []
-    assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
+    body = calls[0]["messages"][1]["content"]
+    assert len(body.encode()) <= CHECKER_BUDGET
+    assert '"i":0' in body and refs[0].id not in body
+    assert calls[0]["max_tokens"] == 300
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    assert "indices" in schema["properties"] and "ids" not in schema["properties"]
+    assert len(calls[0]["messages"][0]["content"]) < 1200
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
+
+
+def test_embedded_text_and_checker_keep_v8_fields(library):
+    *_, ref = library
+    analysis = Interpretation(
+        summary="Landing com hero roxo", coverage="partial", headline="Hero roxo de produto",
+        appearance=["fundo roxo"], ui_types=["landing page", "hero"],
+        colors=["roxo / purple"], brand="Queep", on_screen_text=["Start free"],
+        hook="Uma abertura curta", style="flat")
+    source = source_fixture().model_copy(update={"text": "x" * 4000})
+    current = ref.model_copy(update={"analysis": analysis, "source": source, "text": "nota"})
+    embedded = document(current, analysis)
+    assert "roxo / purple" in embedded and "landing page" in embedded
+    assert "Start free" in embedded and "fundo roxo" in embedded
+    assert embedded.index("Cores") < embedded.index("Página")
+    assert len(embedded.encode()) <= 6800
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
+    assert ai.verify("roxo", [current]) == [current.id]
+    candidate = json.loads(calls[0]["messages"][1]["content"])["candidates"][0]
+    assert candidate["colors"] == ["roxo / purple"]
+    assert candidate["ui_types"] == ["landing page", "hero"]
+    assert candidate["on_screen_text"] == ["Start free"]
+    assert candidate["brand"] == "Queep"
 
 
 def test_process_stores_site_preview_without_vision_frames(library, monkeypatch):
@@ -963,7 +1031,7 @@ def test_process_stores_site_preview_without_vision_frames(library, monkeypatch)
     assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
     stored = repo.get(uid, ref.id)
     assert seen[:2] == ["author", "gallery"]
-    assert seen[2] == ("interpret", None)
+    assert seen[2] == ("interpret", [preview])
     assert stored.author_image.sha256 == "b" * 64
     assert stored.images[0].sha256 == "a" * 64
     assert stored.source.title == "Cursor"
