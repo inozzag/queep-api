@@ -16,11 +16,11 @@ Run where ADC can read ``queep-dev-hstlx`` (this repo has no credentials):
     uv run --env-file .env.evaluation python eval/recall.py --uid UID
 
 About US$0.0002 per query for the embedding. ``--checker`` adds one verifier
-call per query. Empty labels print the count only: a short non-zero list is
-acceptable. After a real run, tune ``TAIL_RELATIVE_GAP``, ``MIN_RESULTS``,
-``RESULT_LIMIT`` and the RRF weights in ``queep/ranking.py``. The constants
-in the code are the initial calibration; they were not fit on this library
-because the eval has not been executed against production data.
+call per query and gives up after 8 seconds; a timeout keeps the ranked list.
+Empty labels print the count only. Color queries with no evidence are capped
+at a short near-miss list. Short themes (1–2 words, no color) keep a fused
+head and then the cosine tail. After a real run, tune the constants in
+``queep/ranking.py``.
 """
 
 import argparse
@@ -37,11 +37,15 @@ from queep.ai import AIError  # noqa: E402
 from queep.lexicon import expand_terms  # noqa: E402
 from queep.models import Reference  # noqa: E402
 from queep.ranking import (  # noqa: E402
+    BROAD_COSINE_KEEP,
+    BROAD_TOKEN_LIMIT,
     EXPANSION_WEIGHT,
+    FUSED_PROTECT,
     HEAD_LIMIT,
     KEYWORD_WEIGHT,
     MIN_RESULTS,
     RESULT_LIMIT,
+    SPECIFIC_MISS_LIMIT,
     TAIL_RELATIVE_GAP,
     VECTOR_WEIGHT,
     contradicting_ids,
@@ -126,6 +130,9 @@ def _line(query, name, ranked, relevant):
 def render_header():
     return (
         f"constantes: janela={RESULT_LIMIT} mínimo={MIN_RESULTS} "
+        f"protege={FUSED_PROTECT} cosseno_amplo={BROAD_COSINE_KEEP} "
+        f"palavras_amplas<={BROAD_TOKEN_LIMIT} "
+        f"sem_cor={SPECIFIC_MISS_LIMIT} "
         f"cabeça={HEAD_LIMIT} folga={TAIL_RELATIVE_GAP} "
         f"pesos vetor/palavra/expansão="
         f"{VECTOR_WEIGHT}/{KEYWORD_WEIGHT}/{EXPANSION_WEIGHT}"

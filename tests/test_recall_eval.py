@@ -4,9 +4,17 @@ from datetime import UTC, datetime
 
 import pytest
 
-from eval.recall import apply_checker, fuse_and_cosine, load_queries, recall_at, render_labeled
+from eval.recall import (
+    apply_checker,
+    fuse_and_cosine,
+    load_queries,
+    recall_at,
+    render_header,
+    render_labeled,
+)
 from queep.ai import AIError
 from queep.models import Interpretation
+from queep.ranking import BROAD_COSINE_KEEP, FUSED_PROTECT, SPECIFIC_MISS_LIMIT
 
 QUERY = [1.0] + [0.0] * 767
 WEAK = [0.05, 1.0] + [0.0] * 766
@@ -52,6 +60,13 @@ def test_owner_queries_are_ids_only_and_include_the_qualitative_set():
         "vídeos que têm hook que gera criatividade",
         "logos verdes",
     ]
+
+
+def test_recall_header_names_the_adaptive_cut():
+    header = render_header()
+    assert f"protege={FUSED_PROTECT}" in header
+    assert f"cosseno_amplo={BROAD_COSINE_KEEP}" in header
+    assert f"sem_cor={SPECIFIC_MISS_LIMIT}" in header
 
 
 def test_recall_math_and_empty_labels():
