@@ -224,6 +224,7 @@ def _payload(body, page):
     empty = {"author": "", "handle": "", "caption": "", "avatar": None, "slides": []}
     if not body:
         return empty
+    text = body.decode("utf-8", "replace") if isinstance(body, (bytes, bytearray)) else str(body)
     try:
         value = json.loads(body)
         if isinstance(value, dict):
@@ -232,6 +233,9 @@ def _payload(body, page):
                 return parsed
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
+    gql = _gql_from_text(text, page)
+    if gql:
+        return gql
     from bs4 import BeautifulSoup
 
     from queep.sources import meta_content
@@ -279,12 +283,51 @@ def _payload(body, page):
     }
 
 
+def _decode_json_value(value):
+    """Unescape a JSON string at most twice. `gql_data` is often encoded that way."""
+    current = value
+    for _ in range(2):
+        if not isinstance(current, str):
+            return current
+        try:
+            current = json.loads(current)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return current
+    return current
+
+
 def _from_json(value, page):
+    if isinstance(value, str):
+        value = _decode_json_value(value)
+    if not isinstance(value, dict):
+        return None
+    gql = value.get("gql_data")
+    if isinstance(gql, (str, dict)):
+        decoded = gql if isinstance(gql, dict) else _decode_json_value(gql)
+        if isinstance(decoded, dict):
+            parsed = _from_json(decoded, page)
+            if parsed:
+                return parsed
     node = _media_node(value)
     if node:
         return _from_graphql(node, page)
     if isinstance(value.get("medias"), list) or "username" in value:
         return _from_instafix(value, page)
+    return None
+
+
+def _gql_from_text(text, page):
+    """video_url hidden in an escaped `gql_data` string, with no <video> tag."""
+    if "gql_data" not in text:
+        return None
+    for match in re.finditer(r'"gql_data"\s*:\s*"((?:\\.|[^"\\])*)"', text):
+        try:
+            decoded = json.loads('"' + match.group(1) + '"')
+        except json.JSONDecodeError:
+            continue
+        parsed = _from_json(decoded, page)
+        if parsed and (parsed.get("slides") or parsed.get("handle") or parsed.get("caption")):
+            return parsed
     return None
 
 

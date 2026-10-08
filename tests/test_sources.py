@@ -1594,6 +1594,61 @@ def test_dribbble_shot_stays_on_the_dribbble_reader(monkeypatch):
     assert seen and all("dribbble.com" in item for item in seen)
 
 
+def _instagram_gql_html(node):
+    inner = json.dumps(node, separators=(",", ":")).replace("/", r"\/")
+    return (
+        "<html><head><title>Instagram</title></head><body><script>"
+        + json.dumps({"gql_data": inner})
+        + "</script></body></html>"
+    ).encode()
+
+
+def test_instagram_escaped_gql_data_video_url_becomes_a_clip():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/reel/AbC_12/")
+    body = _instagram_gql_html({
+        "shortcode_media": {
+            "is_video": True,
+            "video_url": "https://scontent.cdninstagram.com/v/reel.mp4",
+            "display_url": "https://scontent.cdninstagram.com/poster.jpg",
+            "owner": {"username": "nike"},
+            "edge_media_to_caption": {
+                "edges": [{"node": {"text": "A caption long enough here"}}],
+            },
+        }
+    })
+    assert b"<video" not in body and b"video_url" in body
+    media = adapter.media(body, url, adapter.match(url))
+    video = next(item for item in media if item["kind"] == "video")
+    assert video["url"] == "https://scontent.cdninstagram.com/poster.jpg"
+    assert video["clip_url"] == "https://scontent.cdninstagram.com/v/reel.mp4"
+    parsed = adapter.parse(body, url, adapter.match(url))
+    assert parsed.author_handle == "nike" and "caption long enough" in parsed.text
+
+
+def test_instagram_gql_data_without_a_video_url_stays_a_poster():
+    from queep.social.instagram import InstagramAdapter
+
+    adapter = InstagramAdapter()
+    url = sources.checked_url("https://www.instagram.com/reel/AbC_12/")
+    body = _instagram_gql_html({
+        "shortcode_media": {
+            "is_video": True,
+            "display_url": "https://scontent.cdninstagram.com/poster.jpg",
+            "owner": {"username": "nike"},
+            "edge_media_to_caption": {
+                "edges": [{"node": {"text": "A caption long enough here"}}],
+            },
+        }
+    })
+    media = adapter.media(body, url, adapter.match(url))
+    video = next(item for item in media if item["kind"] == "video")
+    assert video["url"].endswith("poster.jpg")
+    assert "clip_url" not in video
+
+
 def test_instagram_embed_reads_caption_author_and_image():
     from queep.social.instagram import InstagramAdapter
 
