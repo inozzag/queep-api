@@ -14,7 +14,13 @@ from eval.recall import (
 )
 from queep.ai import AIError
 from queep.models import Interpretation
-from queep.ranking import BROAD_COSINE_KEEP, FUSED_PROTECT, SPECIFIC_MISS_LIMIT
+from queep.ranking import (
+    BROAD_COSINE_FLOOR,
+    BROAD_MISS_LIMIT,
+    BROAD_RESULT_CAP,
+    FUSED_PROTECT,
+    SPECIFIC_MISS_LIMIT,
+)
 
 QUERY = [1.0] + [0.0] * 767
 WEAK = [0.05, 1.0] + [0.0] * 766
@@ -65,7 +71,9 @@ def test_owner_queries_are_ids_only_and_include_the_qualitative_set():
 def test_recall_header_names_the_adaptive_cut():
     header = render_header()
     assert f"protege={FUSED_PROTECT}" in header
-    assert f"cosseno_amplo={BROAD_COSINE_KEEP}" in header
+    assert f"teto_amplo={BROAD_RESULT_CAP}" in header
+    assert f"piso={BROAD_COSINE_FLOOR}" in header
+    assert f"sem_apoio={BROAD_MISS_LIMIT}" in header
     assert f"sem_cor={SPECIFIC_MISS_LIMIT}" in header
 
 

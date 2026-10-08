@@ -9,18 +9,27 @@ from queep.textnorm import SHORT_TOKENS, STOPWORDS, fold, tokenize
 RESULT_LIMIT = 60
 # Always keep this many ready items when the library has them, even past the gap.
 MIN_RESULTS = 12
-# Contradiction checker only. The tail is returned unverified so the prompt stays ~19.5 KB.
+# Contradiction checker only. The tail is returned unverified.
 HEAD_LIMIT = 8
 # Keep a hit when its score is at least (1 - gap) times the best score.
 # Used for queries that are neither a short theme nor a color constraint.
 TAIL_RELATIVE_GAP = 0.55
 # Short themes ("interface", "web design", "mobile"): 1–2 content words, no color.
-# The fused head stays put so precision at 10 holds; the cosine list then fills
-# the window so a short fusion cannot hide neighbors the vector rank already had.
+# The fused head stays in order. Extra rows have to clear a cosine floor; an RRF
+# gap does not, because k=60 keeps almost every fusion score within 15% of the best.
 BROAD_TOKEN_LIMIT = 2
 FUSED_PROTECT = 10
-BROAD_COSINE_KEEP = 45
-BROAD_GAP = 0.85
+# Neighbor stays when cosine >= max(absolute, relative * best cosine).
+# 0.82 drops a shelf that has fallen off the best neighbor; 0.40 rejects a query
+# that never lands on this library. Cap keeps a flat-but-real theme inside 20–45.
+BROAD_COSINE_RELATIVE = 0.82
+BROAD_COSINE_FLOOR = 0.40
+BROAD_RESULT_CAP = 40
+# No lexical support (or the best cosine misses the absolute floor): short list.
+BROAD_MISS_LIMIT = 8
+# "Log in" / "Sign up" on most pages is chrome. A rare page term still counts.
+CHROME_DF_MAX = 8
+_CHROME_FIELDS = frozenset({"source_text", "transcript"})
 # Color queries keep only rows with the color in v8 fields or, on older items,
 # in appearance and the other write-up fields. No such row: a short near-miss list.
 SPECIFIC_MISS_LIMIT = 5
@@ -153,34 +162,74 @@ def _specific_window(scored, families):
     return [item[2] for item in scored[:SPECIFIC_MISS_LIMIT]]
 
 
-def _broad_window(scored, cosine_rows):
-    """Fused prefix, then cosine neighbors the fusion score would have cut."""
-    loose = cut_tail(scored, gap=BROAD_GAP, minimum=MIN_RESULTS)
+def _support_ids(records, query, expansions):
+    """Ids that actually mention the theme. Ubiquitous page chrome does not."""
+    wanted = set(tokenize(query))
+    wanted.update(tokenize(" ".join(expansions or ())))
+    if not wanted:
+        return []
+    strong = []
+    chrome_counts = {}
+    chrome_rows = []
+    for record in records:
+        identifier = record.get("id") or ""
+        if not identifier:
+            continue
+        strong_hit = False
+        chrome_hit = set()
+        for name, value in field_text(record).items():
+            found = wanted.intersection(tokenize(value))
+            if not found:
+                continue
+            if name in _CHROME_FIELDS:
+                chrome_hit |= found
+            else:
+                strong_hit = True
+        if strong_hit:
+            strong.append(identifier)
+        elif chrome_hit:
+            chrome_rows.append((identifier, chrome_hit))
+            for token in chrome_hit:
+                chrome_counts[token] = chrome_counts.get(token, 0) + 1
+    rare = {token for token, count in chrome_counts.items() if count <= CHROME_DF_MAX}
+    seen = set(strong)
+    for identifier, found in chrome_rows:
+        if identifier not in seen and found & rare:
+            strong.append(identifier)
+            seen.add(identifier)
+    return strong
+
+
+def _cosine_floor(best):
+    if best <= 0:
+        return BROAD_COSINE_FLOOR
+    return max(BROAD_COSINE_FLOOR, best * BROAD_COSINE_RELATIVE)
+
+
+def _broad_window(scored, cosine_rows, support_ids):
+    """Fused head, then only neighbors that clear a cosine floor.
+
+    The old loose fusion gap (0.85) plus a cosine backfill put the whole shelf
+    back into the window and only reordered it. Order of the fused head stays.
+    """
+    fused_ids = [item[1] for item in scored]
     by_id = {item[1]: item[2] for item in scored}
-    loose_ids = [item[1] for item in loose]
-    head = loose_ids[:FUSED_PROTECT]
+    if not fused_ids:
+        return []
+    cosine_score = {row[1]: row[0] for row in cosine_rows}
+    best = cosine_rows[0][0] if cosine_rows else 0.0
+    floor = _cosine_floor(best)
+    if not support_ids or best < BROAD_COSINE_FLOOR:
+        return [by_id[identifier] for identifier in fused_ids[:BROAD_MISS_LIMIT]]
+    passing = [identifier for identifier in fused_ids
+               if cosine_score.get(identifier, 0.0) >= floor]
+    if len(passing) > BROAD_RESULT_CAP:
+        return [by_id[identifier] for identifier in fused_ids[:BROAD_RESULT_CAP]]
+    head = fused_ids[:FUSED_PROTECT]
     seen = set(head)
-    body = []
-
-    def room():
-        return RESULT_LIMIT - (len(head) + len(body))
-
-    for index, row in enumerate(cosine_rows):
-        if index >= BROAD_COSINE_KEEP or room() <= 0:
-            break
-        identifier = row[1]
-        if identifier in seen:
-            continue
-        body.append(identifier)
-        seen.add(identifier)
-    for identifier in loose_ids:
-        if identifier in seen:
-            continue
-        if room() <= 0:
-            break
-        body.append(identifier)
-        seen.add(identifier)
-    return [by_id[identifier] for identifier in head + body]
+    body = [identifier for identifier in passing if identifier not in seen]
+    chosen = (head + body)[:BROAD_RESULT_CAP]
+    return [by_id[identifier] for identifier in chosen]
 
 
 def vector_order(records, vector):
@@ -308,7 +357,7 @@ def fuse_order(records, vector, query, expansions=()):
     if families:
         return _specific_window(scored, families)
     if is_broad_query(query):
-        return _broad_window(scored, vectors)
+        return _broad_window(scored, vectors, _support_ids(active, query, expansions))
     return [item[2] for item in cut_tail(scored)]
 
 

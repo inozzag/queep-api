@@ -1,5 +1,6 @@
 """Ranked search window: generous tail, contradiction filter on the head only."""
 
+import math
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from uuid import uuid4
@@ -11,6 +12,8 @@ from queep.config import database
 from queep.lexicon import expand_terms
 from queep.models import Interpretation
 from queep.ranking import (
+    BROAD_MISS_LIMIT,
+    BROAD_RESULT_CAP,
     FUSED_PROTECT,
     HEAD_LIMIT,
     MIN_RESULTS,
@@ -31,6 +34,13 @@ def _vector(second):
 
 def _weak():
     return [0.05, 1.0] + [0.0] * 766
+
+
+def _at_cosine(score):
+    """Vector whose cosine with QUERY is `score`. QUERY is the unit axis."""
+    score = min(0.999, max(1e-3, score))
+    other = math.sqrt(1.0 / (score * score) - 1.0)
+    return [1.0, other] + [0.0] * 766
 
 
 def put_ready(repo, uid, ref_id, vector, *, summary="Interface de CRM", appearance=None,
@@ -104,8 +114,85 @@ def test_two_word_theme_is_broad_and_a_third_word_is_not():
             f"weak-{index:02d}", _weak(), analysis={"summary": "Paisagem sem termo"}))
     broad = [item["id"] for item in order_ready(rows, QUERY, "web design")]
     longer = [item["id"] for item in order_ready(rows, QUERY, "site hero website")]
-    assert broad[0] == "best" and len(broad) == 16
+    assert broad[0] == "best" and len(broad) == FUSED_PROTECT
+    assert "weak-14" not in broad
     assert longer[0] == "best" and len(longer) == MIN_RESULTS
+
+
+def test_broad_floor_keeps_the_cluster_and_drops_the_shelf():
+    """A real theme stays in the relevant band. The orthogonal tail does not refill it."""
+    rows = []
+    for index in range(32):
+        rows.append(_record(
+            f"ui-{index:02d}", _at_cosine(0.97 - index * 0.001),
+            analysis={"summary": "Interface de produto"}))
+    for index in range(25):
+        rows.append(_record(
+            f"far-{index:02d}", _at_cosine(0.20),
+            analysis={"summary": "Paisagem sem termo"}))
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
+    assert ordered[:FUSED_PROTECT] == [f"ui-{index:02d}" for index in range(FUSED_PROTECT)]
+    assert "ui-20" in ordered
+    assert "far-00" not in ordered
+    assert 20 <= len(ordered) <= BROAD_RESULT_CAP
+    assert len(ordered) < len(rows)
+
+
+def test_flat_theme_caps_instead_of_returning_the_shelf():
+    rows = [
+        _record(f"ui-{index:02d}", _at_cosine(0.95), analysis={"summary": "Interface de produto"})
+        for index in range(57)
+    ]
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
+    assert len(ordered) == BROAD_RESULT_CAP
+    assert ordered[:FUSED_PROTECT] == [f"ui-{index:02d}" for index in range(FUSED_PROTECT)]
+    assert "ui-56" not in ordered
+
+
+def test_broad_head_keeps_a_weak_keyword_and_later_cosine_neighbors():
+    rows = [_record("keyword", _at_cosine(0.05), analysis={"summary": "Interface rara"})]
+    rows.extend(
+        _record(f"near-{index:02d}", _at_cosine(0.96), analysis={"summary": "Paisagem"})
+        for index in range(20))
+    rows.extend(
+        _record(f"far-{index:02d}", _at_cosine(0.12), analysis={"summary": "Outro"})
+        for index in range(36))
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "interface")]
+    assert ordered[0] == "keyword"
+    assert "near-14" in ordered
+    assert "far-00" not in ordered
+    assert BROAD_MISS_LIMIT < len(ordered) <= BROAD_RESULT_CAP
+
+
+def test_login_without_support_stays_short_even_when_cosine_is_flat():
+    rows = [
+        _record(
+            f"row-{index:02d}", _at_cosine(0.96 - (index % 5) * 0.005),
+            analysis={"summary": "Interface de produto"},
+            source={"text": "Log in Sign up"},
+        )
+        for index in range(57)
+    ]
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "login", expand_terms("login"))]
+    assert len(ordered) == BROAD_MISS_LIMIT
+    assert len(ordered) < MIN_RESULTS
+
+
+def test_rare_page_term_still_opens_the_broad_window():
+    rows = []
+    for index in range(30):
+        source = {"text": "The pricing paywall blocks the app"} if index < 3 else None
+        rows.append(_record(
+            f"near-{index:02d}", _at_cosine(0.96),
+            analysis={"summary": "Tela de produto"}, source=source))
+    rows.extend(
+        _record(f"far-{index:02d}", _at_cosine(0.15), analysis={"summary": "Paisagem"})
+        for index in range(27))
+    ordered = [item["id"] for item in order_ready(rows, QUERY, "paywall", expand_terms("paywall"))]
+    assert "near-14" in ordered
+    assert "far-00" not in ordered
+    assert len(ordered) > BROAD_MISS_LIMIT
+    assert len(ordered) <= BROAD_RESULT_CAP
 
 
 def test_tail_cut_keeps_the_minimum_when_scores_fall_off():

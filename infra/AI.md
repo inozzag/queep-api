@@ -11,9 +11,9 @@ invalida o processamento anterior. O botão de nova tentativa abre outra execuç
 `POST /v1/search` usa apenas documentos prontos do proprietário no mesmo espaço de
 embeddings. Ordena o acervo ativo já carregado (vetor fundido com palavra-chave e sinônimos PT/EN) e devolve uma janela (teto 60,
 `candidate_limit` na resposta; o cliente que limitar a grade por esse campo passa a
-mostrar a lista maior). Consulta curta sem cor (1–2 palavras: interface, web design, mobile) protege os
-10 primeiros da fusão e completa a janela com vizinhos do cosseno (até 45), para
-não parar no mínimo de 12 e perder o que o vetor já tinha. Consulta com cor fica
+mostrar a lista maior). Consulta curta sem cor (1–2 palavras: interface, web design, mobile) mantém a ordem dos
+10 primeiros da fusão e só acrescenta vizinhos acima de um piso de cosseno (fração do melhor e um piso absoluto), com teto 40.
+Sem apoio lexical no item — o "log in" repetido no chrome da página não conta — a lista fica curta (8). Consulta com cor fica
 só nos itens que citam essa cor em `colors`/`brand` ou, em itens antigos, na
 aparência e no texto da leitura; se ninguém cita, voltam 5 quase-acertos, não a
 biblioteca inteira. A conferência roda só na cabeça (8 itens, ~19,5 KB, timeout

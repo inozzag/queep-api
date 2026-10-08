@@ -18,9 +18,10 @@ Run where ADC can read ``queep-dev-hstlx`` (this repo has no credentials):
 About US$0.0002 per query for the embedding. ``--checker`` adds one verifier
 call per query and gives up after 8 seconds; a timeout keeps the ranked list.
 Empty labels print the count only. Color queries with no evidence are capped
-at a short near-miss list. Short themes (1–2 words, no color) keep a fused
-head and then the cosine tail. After a real run, tune the constants in
-``queep/ranking.py``.
+at a short near-miss list. Short themes (1–2 words, no color) keep the fused
+head, then only cosine neighbors above a floor, capped so a flat shelf is not
+returned whole. A theme with no lexical support stays a short list. After a
+real run, tune the constants in ``queep/ranking.py``.
 """
 
 import argparse
@@ -37,7 +38,10 @@ from queep.ai import AIError  # noqa: E402
 from queep.lexicon import expand_terms  # noqa: E402
 from queep.models import Reference  # noqa: E402
 from queep.ranking import (  # noqa: E402
-    BROAD_COSINE_KEEP,
+    BROAD_COSINE_FLOOR,
+    BROAD_COSINE_RELATIVE,
+    BROAD_MISS_LIMIT,
+    BROAD_RESULT_CAP,
     BROAD_TOKEN_LIMIT,
     EXPANSION_WEIGHT,
     FUSED_PROTECT,
@@ -130,7 +134,9 @@ def _line(query, name, ranked, relevant):
 def render_header():
     return (
         f"constantes: janela={RESULT_LIMIT} mínimo={MIN_RESULTS} "
-        f"protege={FUSED_PROTECT} cosseno_amplo={BROAD_COSINE_KEEP} "
+        f"protege={FUSED_PROTECT} teto_amplo={BROAD_RESULT_CAP} "
+        f"piso={BROAD_COSINE_FLOOR} relativo={BROAD_COSINE_RELATIVE} "
+        f"sem_apoio={BROAD_MISS_LIMIT} "
         f"palavras_amplas<={BROAD_TOKEN_LIMIT} "
         f"sem_cor={SPECIFIC_MISS_LIMIT} "
         f"cabeça={HEAD_LIMIT} folga={TAIL_RELATIVE_GAP} "
