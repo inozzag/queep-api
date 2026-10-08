@@ -3,7 +3,15 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 class Capture(BaseModel):
@@ -43,6 +51,13 @@ class MetadataEdit(BaseModel):
     mutation_id: UUID
 
 
+UI_TYPES = (
+    "landing page", "hero", "paywall", "pricing", "login/cadastro", "onboarding",
+    "dashboard", "mobile app", "website", "e-commerce", "logo", "tipografia",
+    "ilustração", "anúncio", "social post", "vídeo", "other",
+)
+
+
 class Interpretation(BaseModel):
     summary: str = Field(max_length=4000)
     headline: str = Field(default="", max_length=80)
@@ -50,10 +65,21 @@ class Interpretation(BaseModel):
     entities: list[str] = Field(default_factory=list, max_length=30)
     usefulness: list[str] = Field(default_factory=list, max_length=20)
     appearance: list[str] = Field(default_factory=list, max_length=20)
+    ui_types: list[str] = Field(default_factory=list, max_length=8)
+    colors: list[str] = Field(default_factory=list, max_length=8)
+    brand: str = Field(default="", max_length=80)
+    on_screen_text: list[str] = Field(default_factory=list, max_length=8)
+    hook: str = Field(default="", max_length=240)
+    style: str = Field(default="", max_length=240)
+    transcript_summary: str = Field(default="", max_length=500)
+    # Optional so queep-interpretation-v8 can omit it; interpretation_schema()
+    # leaves it out of required.
+    portrait: str = Field(default="", max_length=500)
     coverage: Literal["full", "partial"]
     limitations: list[str] = Field(default_factory=list, max_length=20)
 
-    @field_validator("topics", "entities", "usefulness", "appearance", "limitations")
+    @field_validator("topics", "entities", "usefulness", "appearance", "limitations",
+                     "ui_types", "colors", "on_screen_text")
     @classmethod
     def bounded_entries(cls, value):
         if any(len(entry) > 500 for entry in value):
@@ -117,6 +143,8 @@ class Reference(BaseModel):
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)
+    # True when a link was published without the media or page the source offered.
+    media_incomplete: bool = False
 
 
 class Library(BaseModel):
@@ -133,7 +161,9 @@ class Search(BaseModel):
 class SearchResults(BaseModel):
     items: list[Reference]
     has_pending: bool
-    candidate_limit: int = 10
+    # Cap of the ranked window. Clients that size the grid from this field should
+    # read it (historically 10). The server sets the active value on each response.
+    candidate_limit: int = 60
 
 
 class ArchiveEdit(BaseModel):
@@ -150,6 +180,8 @@ class BatchArchive(BaseModel):
 class RetryAnalysis(BaseModel):
     model_config = ConfigDict(extra="forbid")
     revision: int = Field(ge=1)
+    # fetch is the button default. analysis uses the same acceptance set.
+    scope: Literal["fetch", "analysis"] = "fetch"
 
 
 _BR_AREA_CODES = {
@@ -242,6 +274,41 @@ class OnboardingProfile(BaseModel):
 
 class OnboardingRecord(OnboardingProfile):
     completed_at: datetime
+
+
+def _iso(value: datetime | None):
+    # Match jsonable_encoder so these GETs stay byte-compatible with the other account routes.
+    return None if value is None else value.isoformat()
+
+
+class AccountStatus(BaseModel):
+    status: Literal["active", "scheduled", "deleting", "deleted"]
+    version: int
+    delete_at: datetime | None
+    can_restore: bool
+
+    @field_serializer("delete_at")
+    def serialize_delete_at(self, value: datetime | None):
+        return _iso(value)
+
+
+class UsageCounter(BaseModel):
+    used: int
+    limit: int
+
+
+class UsageSnapshot(BaseModel):
+    plan: Literal["free", "pro", "max"]
+    resets_at: datetime
+    counters: dict[str, UsageCounter]
+
+    @field_serializer("resets_at")
+    def serialize_resets_at(self, value: datetime):
+        return _iso(value)
+
+
+class APIError(BaseModel):
+    detail: str
 
 
 class SpaceName(BaseModel):

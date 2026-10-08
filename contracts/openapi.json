@@ -53,7 +53,37 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Falha transitória. Tente novamente após Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos até repetir a leitura.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
               }
             }
           }
@@ -147,6 +177,68 @@
         ]
       }
     },
+    "/v1/account/onboarding": {
+      "get": {
+        "summary": "Read Onboarding",
+        "operationId": "read_onboarding_v1_account_onboarding_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "put": {
+        "summary": "Write Onboarding",
+        "operationId": "write_onboarding_v1_account_onboarding_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OnboardingProfile"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OnboardingRecord"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/v1/account": {
       "get": {
         "summary": "Account Status",
@@ -156,7 +248,37 @@
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/AccountStatus"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Sessão inválida",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Falha transitória. Tente novamente após Retry-After.",
+            "headers": {
+              "Retry-After": {
+                "description": "Segundos até repetir a leitura.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/APIError"
+                }
               }
             }
           }
@@ -984,6 +1106,16 @@
               "default": "gallery",
               "title": "Role"
             }
+          },
+          {
+            "name": "motion",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Motion"
+            }
           }
         ],
         "responses": {
@@ -994,7 +1126,8 @@
                 "schema": {}
               },
               "image/jpeg": {},
-              "image/png": {}
+              "image/png": {},
+              "video/mp4": {}
             }
           },
           "422": {
@@ -1113,6 +1246,16 @@
               "type": "boolean",
               "default": false,
               "title": "Thumbnail"
+            }
+          },
+          {
+            "name": "loop",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Loop"
             }
           }
         ],
@@ -1282,6 +1425,19 @@
   },
   "components": {
     "schemas": {
+      "APIError": {
+        "properties": {
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "detail"
+        ],
+        "title": "APIError"
+      },
       "Access": {
         "properties": {
           "mode": {
@@ -1379,6 +1535,48 @@
           "version"
         ],
         "title": "AccountChange"
+      },
+      "AccountStatus": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "active",
+              "scheduled",
+              "deleting",
+              "deleted"
+            ],
+            "title": "Status"
+          },
+          "version": {
+            "type": "integer",
+            "title": "Version"
+          },
+          "delete_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delete At"
+          },
+          "can_restore": {
+            "type": "boolean",
+            "title": "Can Restore"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "version",
+          "delete_at",
+          "can_restore"
+        ],
+        "title": "AccountStatus"
       },
       "ArchiveEdit": {
         "properties": {
@@ -1580,10 +1778,16 @@
             "type": "string",
             "enum": [
               "photo",
-              "video"
+              "video",
+              "gif"
             ],
             "title": "Preview Kind",
             "default": "photo"
+          },
+          "motion": {
+            "type": "boolean",
+            "title": "Motion",
+            "default": false
           }
         },
         "type": "object",
@@ -1640,6 +1844,60 @@
             "type": "array",
             "maxItems": 20,
             "title": "Appearance"
+          },
+          "ui_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Ui Types"
+          },
+          "colors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Colors"
+          },
+          "brand": {
+            "type": "string",
+            "maxLength": 80,
+            "title": "Brand",
+            "default": ""
+          },
+          "on_screen_text": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "On Screen Text"
+          },
+          "hook": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Hook",
+            "default": ""
+          },
+          "style": {
+            "type": "string",
+            "maxLength": 240,
+            "title": "Style",
+            "default": ""
+          },
+          "transcript_summary": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Transcript Summary",
+            "default": ""
+          },
+          "portrait": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Portrait",
+            "default": ""
           },
           "coverage": {
             "type": "string",
@@ -1741,6 +1999,11 @@
               }
             ],
             "title": "Height"
+          },
+          "loop": {
+            "type": "boolean",
+            "title": "Loop",
+            "default": false
           }
         },
         "type": "object",
@@ -1797,6 +2060,133 @@
         ],
         "title": "MetadataEdit",
         "description": "Title and notes of an uploaded image or media file; the file itself never changes."
+      },
+      "OnboardingProfile": {
+        "properties": {
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "anuncio",
+              "instagram",
+              "tiktok",
+              "twitter",
+              "youtube",
+              "google",
+              "linkedin",
+              "amigo",
+              "ai_chat",
+              "podcast",
+              "app_store"
+            ],
+            "title": "Source"
+          },
+          "work": {
+            "type": "string",
+            "enum": [
+              "design",
+              "marketing",
+              "conteudo",
+              "social",
+              "fotografia",
+              "publicidade",
+              "produto",
+              "empreendedor",
+              "educacao",
+              "outro"
+            ],
+            "title": "Work"
+          },
+          "work_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Detail"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phone",
+          "source",
+          "work"
+        ],
+        "title": "OnboardingProfile",
+        "description": "Answers collected before the first save. The phone stays on the account document."
+      },
+      "OnboardingRecord": {
+        "properties": {
+          "phone": {
+            "type": "string",
+            "title": "Phone"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "anuncio",
+              "instagram",
+              "tiktok",
+              "twitter",
+              "youtube",
+              "google",
+              "linkedin",
+              "amigo",
+              "ai_chat",
+              "podcast",
+              "app_store"
+            ],
+            "title": "Source"
+          },
+          "work": {
+            "type": "string",
+            "enum": [
+              "design",
+              "marketing",
+              "conteudo",
+              "social",
+              "fotografia",
+              "publicidade",
+              "produto",
+              "empreendedor",
+              "educacao",
+              "outro"
+            ],
+            "title": "Work"
+          },
+          "work_detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Work Detail"
+          },
+          "completed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Completed At"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "phone",
+          "source",
+          "work",
+          "completed_at"
+        ],
+        "title": "OnboardingRecord"
       },
       "Reference": {
         "properties": {
@@ -1953,6 +2343,11 @@
               }
             ],
             "title": "Transcript"
+          },
+          "media_incomplete": {
+            "type": "boolean",
+            "title": "Media Incomplete",
+            "default": false
           }
         },
         "type": "object",
@@ -1975,6 +2370,15 @@
             "type": "integer",
             "minimum": 1.0,
             "title": "Revision"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "fetch",
+              "analysis"
+            ],
+            "title": "Scope",
+            "default": "fetch"
           }
         },
         "additionalProperties": false,
@@ -2028,7 +2432,7 @@
           "candidate_limit": {
             "type": "integer",
             "title": "Candidate Limit",
-            "default": 10
+            "default": 60
           }
         },
         "type": "object",
@@ -2232,6 +2636,56 @@
           "name"
         ],
         "title": "SpaceName"
+      },
+      "UsageCounter": {
+        "properties": {
+          "used": {
+            "type": "integer",
+            "title": "Used"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "used",
+          "limit"
+        ],
+        "title": "UsageCounter"
+      },
+      "UsageSnapshot": {
+        "properties": {
+          "plan": {
+            "type": "string",
+            "enum": [
+              "free",
+              "pro",
+              "max"
+            ],
+            "title": "Plan"
+          },
+          "resets_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Resets At"
+          },
+          "counters": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/UsageCounter"
+            },
+            "type": "object",
+            "title": "Counters"
+          }
+        },
+        "type": "object",
+        "required": [
+          "plan",
+          "resets_at",
+          "counters"
+        ],
+        "title": "UsageSnapshot"
       },
       "ValidationError": {
         "properties": {

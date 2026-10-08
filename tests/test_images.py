@@ -346,6 +346,59 @@ def test_attach_preview_stores_a_looping_gif(client, account):
                       headers=headers).status_code == 404
 
 
+def test_attach_preview_upgrades_motion_on_the_same_sha(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    assert client.put(
+        path, json={"kind": "link", "url": "https://x.com/a/status/2099804636328648823"},
+        headers=headers,
+    ).status_code == 200
+    still = media().attach_preview(uid, ref_id, picture("blue"), preview_kind="photo")
+    loop = b"muted-loop" + b"\x00" * 48
+    upgraded = media().attach_preview(
+        uid, ref_id, picture("blue"), preview_kind="video", motion=loop)
+    assert upgraded.sha256 == still.sha256
+    assert upgraded.preview_kind == "video" and upgraded.motion is True
+    record = client.get(path, headers=headers).json()
+    assert len(record["images"]) == 1
+    assert record["image"]["motion"] is True and record["images"][0]["motion"] is True
+    played = client.get(path + "/image", params={"motion": "true"}, headers=headers)
+    assert played.status_code == 200 and played.content == loop
+    again = media().attach_preview(
+        uid, ref_id, picture("blue"), preview_kind="video", motion=loop)
+    assert again.motion is True
+    assert len(client.get(path, headers=headers).json()["images"]) == 1
+
+
+def test_full_gallery_keeps_unrelated_slides_and_upgrades_a_match(client, account):
+    uid, headers = account
+    ref_id = str(uuid4())
+    path = f"/v1/references/{ref_id}"
+    assert client.put(
+        path, json={"kind": "link", "url": "https://x.com/a/status/2099804636328648823"},
+        headers=headers,
+    ).status_code == 200
+    colors = ("red", "green", "blue", "yellow")
+    infos = [media().attach_preview(uid, ref_id, picture(color)) for color in colors]
+    extra = media().attach_preview(uid, ref_id, picture("black"))
+    record = client.get(path, headers=headers).json()
+    assert len(record["images"]) == 4
+    assert extra.sha256 == infos[-1].sha256
+    assert [item["sha256"] for item in record["images"]] == [item.sha256 for item in infos]
+    loop = b"loop" * 16
+    upgraded = media().attach_preview(
+        uid, ref_id, picture("green"), preview_kind="video", motion=loop)
+    assert upgraded.sha256 == infos[1].sha256 and upgraded.motion is True
+    record = client.get(path, headers=headers).json()
+    assert len(record["images"]) == 4
+    assert record["images"][1]["motion"] is True and record["images"][1]["preview_kind"] == "video"
+    assert record["images"][0]["motion"] is False
+    assert record["image"]["sha256"] == infos[0].sha256
+    played = client.get(path + "/image", params={"motion": "true", "index": 1}, headers=headers)
+    assert played.status_code == 200 and played.content == loop
+
+
 def test_attach_author_is_served_apart_from_the_gallery(client, account):
     uid, headers = account
     ref_id = str(uuid4())

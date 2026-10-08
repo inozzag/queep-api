@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from google.cloud.firestore_v1.base_query import FieldFilter
 
 from queep.account_state import require_open
+from queep.availability import call_read
 from queep.config import Settings
 from queep.plans import denied, month_window
 
@@ -116,8 +117,13 @@ def snapshot(db, uid, settings, now=None, access=None):
     require_open(db, uid)
     access = access or policy(db, uid)
     now, reset = month_window(now)
-    old = document(db, uid, now).get().to_dict() or {}
-    _, stored = inventory(db, uid)
+
+    def load():
+        old = document(db, uid, now).get().to_dict() or {}
+        _, stored = inventory(db, uid)
+        return old, stored
+
+    old, stored = call_read(load)
     return {
         "plan": access.plan,
         "resets_at": reset,

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from queep.account_state import deletion_document, require_open
 from queep.accounts import Accounts
 from queep.ai import AI, AIError
+from queep.availability import auth_retry
 from queep.billing import Access, Billing, Webhook
 from queep.config import Settings, database, firebase_app, image_bucket
 from queep.dispatch import dispatch_one
@@ -21,6 +22,8 @@ from queep.jobs import Jobs
 from queep.media import MAX_BYTES as MAX_MEDIA_BYTES
 from queep.media import MediaFiles
 from queep.models import (
+    AccountStatus,
+    APIError,
     ArchiveEdit,
     BatchArchive,
     Capture,
@@ -38,6 +41,7 @@ from queep.models import (
     SpaceEdit,
     SpaceMembership,
     SpaceName,
+    UsageSnapshot,
 )
 from queep.repository import Repository
 from queep.search import search
@@ -57,16 +61,35 @@ app = FastAPI(title="Queep API", version="0.1.0", lifespan=lifespan)
 bearer = HTTPBearer(auto_error=False)
 
 
-def user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+_REJECTED_AUTH = (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
+                  auth.UserNotFoundError, ValueError)
+
+
+def verified_user(credentials, *, recent=False, revoked=True, headers=None):
     if not credentials:
-        raise HTTPException(401, "Entre na sua conta", headers={"WWW-Authenticate": "Bearer"})
+        raise HTTPException(401, "Entre na sua conta", headers=headers)
     try:
-        claims = auth.verify_id_token(
-            credentials.credentials, app=firebase_app(), check_revoked=True,
-        )
-    except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
-            auth.UserNotFoundError, ValueError) as exc:
-        raise HTTPException(401, "Sessão inválida", headers={"WWW-Authenticate": "Bearer"}) from exc
+        claims = auth.verify_id_token(credentials.credentials, app=firebase_app(),
+                                      check_revoked=revoked)
+        if recent:
+            age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
+            if not 0 <= age <= 300:
+                raise HTTPException(403,
+                                    "Confirme sua identidade novamente para alterar a exclusão.")
+        return claims
+    except HTTPException:
+        raise
+    except _REJECTED_AUTH as exc:
+        raise HTTPException(401, "Sessão inválida", headers=headers) from exc
+    except Exception as exc:
+        mapped = auth_retry(exc)
+        if mapped is not None:
+            raise mapped from exc
+        raise
+
+
+def user(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
+    claims = verified_user(credentials, headers={"WWW-Authenticate": "Bearer"})
     require_open(database(), claims["uid"])
     return claims["uid"]
 
@@ -124,7 +147,16 @@ def subscription_access(uid: UID, subscriptions: Subscriptions):
     return subscriptions.access(uid)
 
 
-@app.get("/v1/usage")
+_UNAUTHORIZED = {"description": "Sessão inválida", "model": APIError}
+_RETRY = {
+    "description": "Falha transitória. Tente novamente após Retry-After.",
+    "model": APIError,
+    "headers": {"Retry-After": {"description": "Segundos até repetir a leitura.",
+                                "schema": {"type": "string"}}},
+}
+
+
+@app.get("/v1/usage", response_model=UsageSnapshot, responses={401: _UNAUTHORIZED, 503: _RETRY})
 def usage(uid: UID, subscriptions: Subscriptions):
     return snapshot(database(), uid, Settings(), access=subscriptions.access(uid))
 
@@ -136,20 +168,7 @@ class AccountChange(BaseModel):
 
 
 def account_claims(credentials, recent=False, revoked=True):
-    if not credentials:
-        raise HTTPException(401, "Entre na sua conta")
-    try:
-        claims = auth.verify_id_token(credentials.credentials, app=firebase_app(),
-                                      check_revoked=revoked)
-        if recent:
-            age = datetime.now(UTC).timestamp() - claims.get("auth_time", 0)
-            if not 0 <= age <= 300:
-                raise HTTPException(403,
-                                    "Confirme sua identidade novamente para alterar a exclusão.")
-        return claims
-    except (auth.InvalidIdTokenError, auth.RevokedIdTokenError, auth.UserDisabledError,
-            auth.UserNotFoundError, ValueError) as exc:
-        raise HTTPException(401, "Sessão inválida") from exc
+    return verified_user(credentials, recent=recent, revoked=revoked)
 
 
 @app.post("/v1/account/deletion", status_code=202)
@@ -196,7 +215,8 @@ def write_onboarding(profile: OnboardingProfile, uid: UID):
     return Accounts(database(), image_bucket(), Settings()).save_onboarding(uid, profile)
 
 
-@app.get("/v1/account")
+@app.get("/v1/account", response_model=AccountStatus,
+         responses={401: _UNAUTHORIZED, 503: _RETRY})
 def account_status(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]):
     uid = account_claims(credentials)["uid"]
     return Accounts(database(), image_bucket(), Settings()).get_status(uid)
@@ -400,7 +420,7 @@ def delete(ref_id: UUID, uid: UID, repo: Repo, media: Media,
 @app.post("/v1/references/{ref_id}/retry", response_model=Reference)
 def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: PaidUID,
                    background: BackgroundTasks):
-    reference = Jobs(database()).retry(uid, str(ref_id), capture.revision)
+    reference = Jobs(database()).retry(uid, str(ref_id), capture.revision, capture.scope)
     background.add_task(dispatch_one, uid, str(ref_id))
     return reference
 
@@ -413,4 +433,5 @@ def find_references(capture: Search, uid: PaidUID, repo: Repo, ai: Annotated[AI,
     except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:
         raise HTTPException(
             503, "A busca está temporariamente indisponível. Tente novamente.",
+            headers={"Retry-After": "1"},
         ) from exc

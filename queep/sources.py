@@ -25,7 +25,8 @@ MAX_BODY = 2 * 1024 * 1024
 MAX_TEXT = 12000  # UTF-8 bytes, before any model-specific clipping.
 TOTAL_TIMEOUT = 20
 READ_LIMITATION = (
-    "Foi lido apenas o texto acessível da página; imagens, áudio e vídeo não foram analisados."
+    "Foi lido o texto acessível, inclusive o hero e o CTA. A imagem de preview entra na "
+    "análise quando está disponível. Áudio e vídeo da página não foram baixados."
 )
 MESSAGES = {
     "address": "Este endereço não permite leitura pública pelo Queep.",
@@ -235,6 +236,42 @@ async def request(url, address, allowed=TEXT_TYPES, max_body=MAX_BODY):
             return response.status, metadata, bytes(body)
 
 
+_CHROME_LABEL = re.compile(
+    r"^(?:log[\s-]?in|sign[\s-]?in|sign[\s-]?up|menu|cookies?|accept(?: all)?|"
+    r"entrar|cadastre-se|cadastrar|aceitar(?: tudo)?|newsletter|subscribe|"
+    r"close|fechar|skip|pular)$",
+    re.I,
+)
+
+
+def _line(value):
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def hero_lines(soup):
+    """Headline and CTA text. Nav chrome such as Log in / Sign up is left out."""
+    lines = []
+
+    def add(value):
+        text = _line(value)
+        if not text or len(text) > 180 or _CHROME_LABEL.match(text):
+            return
+        if text not in lines:
+            lines.append(text)
+
+    for node in soup.find_all("h1"):
+        add(node.get_text(" ", strip=True))
+    header = soup.find("header")
+    if header:
+        for node in header.find_all(["h2", "p"]):
+            add(node.get_text(" ", strip=True))
+    for node in soup.select(
+        "button, a[class*='btn'], a[class*='button'], a[class*='cta'], [role='button']"
+    ):
+        add(node.get_text(" ", strip=True))
+    return lines[:8]
+
+
 def extract(body, metadata, url):
     kind = metadata.get("content-type", "").split(";", 1)[0].lower()
     title = ""
@@ -258,11 +295,15 @@ def extract(body, metadata, url):
         description = meta_content(
             soup, "og:description", "twitter:description", "description"
         )
+        hero = hero_lines(soup)
         for node in soup.select(
-            "script,style,noscript,template,nav,header,footer,aside,"
-            "form,button,svg,[hidden],[aria-hidden='true']"
+            "script,style,noscript,template,nav,footer,aside,"
+            "form,svg,[hidden],[aria-hidden='true']"
         ):
             node.decompose()
+        for node in soup.select("button, [role='button']"):
+            if _CHROME_LABEL.match(_line(node.get_text(" ", strip=True))):
+                node.decompose()
         # GitHub renders public README content here; no code execution or repository crawl.
         content = soup.select_one("article.markdown-body") or soup.article or soup.main or soup.body
         if not content:
@@ -270,6 +311,9 @@ def extract(body, metadata, url):
         text = "\n".join(
             line.strip() for line in content.get_text("\n", strip=True).splitlines() if line.strip()
         )
+        kept = [line for line in hero if line not in text]
+        if kept:
+            text = "Hero: " + " | ".join(kept) + "\n" + text
         title = product or title
         if len(text) < 80:
             summary = _meta_summary(description)
@@ -513,13 +557,38 @@ def video_metadata(body, original):
             text=f"Título: {title[:1000]}\nAutor: {author[:200]}",
             fetched_at=datetime.now(UTC),
             limitations=[
-                "Somente título e autor públicos foram lidos. A fala e as cenas do vídeo "
+                "Somente título, autor e a capa pública foram lidos. A fala e as cenas do vídeo "
                 "não foram analisadas. Envie o arquivo para analisar o conteúdo."
             ],
             native_title=True,
         )
     except (ValueError, TypeError, AttributeError) as error:
         raise SourceError("empty") from error
+
+
+def video_posters(body, page):
+    """Public oEmbed poster and site icon. Private or relative junk is dropped."""
+    try:
+        value = json.loads(body)
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError, TypeError):
+        return []
+    if not isinstance(value, dict):
+        return []
+    previews = []
+    thumb = public_asset_url(value.get("thumbnail_url"), page)
+    if thumb and not thumb.split("?", 1)[0].lower().endswith(".svg"):
+        previews.append({"url": thumb, "kind": "video"})
+    host = (page.host or "").lower()
+    if host in ("youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com"):
+        icon = "https://www.youtube.com/favicon.ico"
+    elif host in ("vimeo.com", "www.vimeo.com"):
+        icon = "https://vimeo.com/favicon.ico"
+    else:
+        icon = None
+    icon_url = public_asset_url(icon, page) if icon else None
+    if icon_url:
+        previews.append({"url": icon_url, "kind": "avatar"})
+    return previews
 
 
 def clean_tweet_text(text):
@@ -1008,7 +1077,7 @@ async def fetch(raw):
     endpoint = social_endpoint(original)
     if endpoint:
         body, _, _ = await fetch_resolved_body(checked_url(endpoint))
-        return video_metadata(body, original), None
+        return video_metadata(body, original), video_posters(body, original) or None
     return await fetch_site(original)
 
 
@@ -1049,19 +1118,36 @@ async def fetch_network(adapter, original, match):
                 attach = getattr(adapter, "attach_gallery", None)
                 if attach:
                     saved = attach(saved, media)
-                return saved, media
+                return saved, await instagram_avatar(adapter, match, saved, media)
             continue
         if not visible and adapter.name == "behance" and match.role == "post":
             saved = parsed
             previews = media
             continue
-        return parsed, media
+        return parsed, await instagram_avatar(adapter, match, parsed, media)
     if saved is not None:
-        return saved, previews
+        return saved, await instagram_avatar(adapter, match, saved, previews)
     fallback = adapter.fallback(original, match, previews)
     if fallback is not None:
-        return fallback, previews
+        return fallback, await instagram_avatar(adapter, match, fallback, previews)
     raise last or SourceError("empty")
+
+
+async def instagram_avatar(adapter, match, parsed, media):
+    """Public profile photo for an Instagram post whose reader had no avatar."""
+    if getattr(adapter, "name", "") != "instagram" or match.role != "post":
+        return media
+    if any(item.get("kind") == "avatar" for item in media):
+        return media
+    handle = (getattr(parsed, "author_handle", "") or "").lstrip("@")
+    if not handle:
+        return media
+    from queep.social.instagram import profile_avatar_url
+
+    avatar = await profile_avatar_url(handle)
+    if not avatar:
+        return media
+    return [{"url": avatar, "kind": "avatar"}, *list(media)]
 
 
 async def fetch_with_retry(raw):
@@ -1155,7 +1241,7 @@ def read_public_clip(url):
 
 def evidence(text, query, limit=700):
     """A bounded source excerpt for verification, preferring paragraphs matching the query."""
-    terms = set(re.findall(r"\w{4,}", query.casefold()))
+    terms = set(re.findall(r"\w{3,}", query.casefold()))
     chunks = [text[start : start + 400] for start in range(0, len(text), 400)]
     best = sorted(
         enumerate(chunks),

@@ -4,6 +4,8 @@ import hashlib
 
 from fastapi import HTTPException
 
+from queep.availability import call_read
+
 
 def deletion_document(db, uid):
     return db.collection("account_deletions").document(hashlib.sha256(uid.encode()).hexdigest())
@@ -15,7 +17,9 @@ def is_closed(db, uid, tx=None):
 
 
 def require_open(db, uid, tx=None):
-    if is_closed(db, uid, tx):
+    # Inside a transaction the writer already maps contention. A bare read must do it here.
+    closed = is_closed(db, uid, tx) if tx is not None else call_read(lambda: is_closed(db, uid))
+    if closed:
         raise HTTPException(401, "Esta conta foi encerrada", headers={"WWW-Authenticate": "Bearer"})
 
 

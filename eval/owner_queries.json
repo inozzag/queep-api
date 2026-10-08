@@ -1,0 +1,157 @@
+{
+  "labeled": [
+    {
+      "query": "interface",
+      "relevant": [
+        "75e981dc-da28-4947-b2f5-5b77a8d0c15e",
+        "73a93872-d218-43b9-8c26-7ff6f6f367a8",
+        "c195c29a-2d05-4cd7-a6d2-1020e77f549c",
+        "0edb0409-c8bc-4f28-97ed-0dc06ffbcd4d",
+        "a6b6103f-c04c-4407-b316-3de8baa930d0",
+        "bca4b5cf-7b54-4870-a4cb-5b0576754b0c",
+        "5104f0a9-2c72-43be-8cc8-5151665799d1",
+        "97da34e4-9cc0-4078-9289-c8a170de2109",
+        "0016d13f-c977-4f7f-9580-797329bc1828",
+        "a2ee9c7b-89c7-40e2-983b-b8ab35715510",
+        "2b02f853-680c-4efb-b834-80c538738702",
+        "57fabd3e-c3a9-41ee-8c7d-d20dcd7a457d",
+        "85c4d334-9363-4418-a111-29400ec2ad47",
+        "139a0a8c-e3c8-4a3d-9983-c9d08cd735d9",
+        "bf284be5-f114-4fab-bb7f-2a1c1af8aa06",
+        "c018c1ad-fd48-4c09-bddf-baf472ca67a4",
+        "d092ff9a-c3cb-4add-993c-e2e5206c473c",
+        "50659cee-40fb-4f7d-908b-71df8847684f",
+        "6f326baa-bbf6-424f-a3dd-1b96e493dc1d",
+        "7aaca07f-f8ab-4409-be59-f53ef5265c6f",
+        "6597686b-297e-4ab8-b311-54920b876abc",
+        "b6bf01fb-1598-436c-8cf4-97b010a54182",
+        "6743617e-220c-4322-bc6f-d84ee5dd96ca",
+        "2d1e1c24-9c9b-4ad6-8cf0-5886ff86a133",
+        "6325e0bf-099d-4054-9d71-0324c31f888a",
+        "117af987-bce6-41f1-b270-598cbc018d00",
+        "7e0a5928-291b-4a07-a4e9-00785add47a2",
+        "545a2673-911b-4568-818a-4e816194ea9c",
+        "50af955f-d97e-4388-8177-83c1bc3c11c9",
+        "97bf8164-af7e-446a-9f9d-28c628518357",
+        "5fd09a73-1c30-44f3-8021-ba48d05cb796"
+      ]
+    },
+    {
+      "query": "web design",
+      "relevant": [
+        "c195c29a-2d05-4cd7-a6d2-1020e77f549c",
+        "0edb0409-c8bc-4f28-97ed-0dc06ffbcd4d",
+        "58a578d2-9b5d-4d0d-b9f3-bdc58629fd39",
+        "97da34e4-9cc0-4078-9289-c8a170de2109",
+        "ecf9b6d7-b2df-43d7-9710-b9b62fe43544",
+        "a2ee9c7b-89c7-40e2-983b-b8ab35715510",
+        "2b02f853-680c-4efb-b834-80c538738702",
+        "c170fb88-15e8-45c2-bdec-24cd3cdfd871",
+        "57fabd3e-c3a9-41ee-8c7d-d20dcd7a457d",
+        "85c4d334-9363-4418-a111-29400ec2ad47",
+        "139a0a8c-e3c8-4a3d-9983-c9d08cd735d9",
+        "bf284be5-f114-4fab-bb7f-2a1c1af8aa06",
+        "6f326baa-bbf6-424f-a3dd-1b96e493dc1d",
+        "7aaca07f-f8ab-4409-be59-f53ef5265c6f",
+        "6597686b-297e-4ab8-b311-54920b876abc",
+        "65190534-e595-4f96-876b-5762bf0bf16e",
+        "7992b981-a5cb-4ce9-9e51-c49d637e2a51",
+        "719b55bc-b51a-4153-b89d-a21987313c04",
+        "4d4861a5-74ff-498f-80ea-e94d75e1bbf9",
+        "b6bf01fb-1598-436c-8cf4-97b010a54182",
+        "7e0a5928-291b-4a07-a4e9-00785add47a2",
+        "545a2673-911b-4568-818a-4e816194ea9c",
+        "97bf8164-af7e-446a-9f9d-28c628518357"
+      ]
+    },
+    {
+      "query": "web design roxo",
+      "relevant": [
+        "bca4b5cf-7b54-4870-a4cb-5b0576754b0c",
+        "c170fb88-15e8-45c2-bdec-24cd3cdfd871",
+        "2d1e1c24-9c9b-4ad6-8cf0-5886ff86a133",
+        "545a2673-911b-4568-818a-4e816194ea9c"
+      ]
+    },
+    {
+      "query": "mobile",
+      "relevant": [
+        "75e981dc-da28-4947-b2f5-5b77a8d0c15e",
+        "a6b6103f-c04c-4407-b316-3de8baa930d0",
+        "c018c1ad-fd48-4c09-bddf-baf472ca67a4",
+        "d092ff9a-c3cb-4add-993c-e2e5206c473c",
+        "50659cee-40fb-4f7d-908b-71df8847684f",
+        "6743617e-220c-4322-bc6f-d84ee5dd96ca",
+        "117af987-bce6-41f1-b270-598cbc018d00"
+      ]
+    },
+    {
+      "query": "paywall",
+      "relevant": [
+        "5104f0a9-2c72-43be-8cc8-5151665799d1",
+        "75279b64-8d62-42cf-95ae-55525afbd6b7",
+        "5fd09a73-1c30-44f3-8021-ba48d05cb796"
+      ]
+    },
+    {"query": "login", "relevant": []},
+    {
+      "query": "website",
+      "relevant": [
+        "c195c29a-2d05-4cd7-a6d2-1020e77f549c",
+        "0edb0409-c8bc-4f28-97ed-0dc06ffbcd4d",
+        "58a578d2-9b5d-4d0d-b9f3-bdc58629fd39",
+        "c417bc13-2c0d-4ae2-8151-9f6c7e9bad18",
+        "97da34e4-9cc0-4078-9289-c8a170de2109",
+        "ecf9b6d7-b2df-43d7-9710-b9b62fe43544",
+        "a2ee9c7b-89c7-40e2-983b-b8ab35715510",
+        "2b02f853-680c-4efb-b834-80c538738702",
+        "f0e36726-05c3-43ed-b506-99af14b2cce6",
+        "deadbe11-0b35-47b6-8806-78cb1ec8de8c",
+        "cea1cc73-2dfc-4ee4-8508-47c680f74e5b",
+        "0219b112-4927-45a1-87ae-bbe6f2d48503",
+        "c170fb88-15e8-45c2-bdec-24cd3cdfd871",
+        "57fabd3e-c3a9-41ee-8c7d-d20dcd7a457d",
+        "85c4d334-9363-4418-a111-29400ec2ad47",
+        "139a0a8c-e3c8-4a3d-9983-c9d08cd735d9",
+        "bf284be5-f114-4fab-bb7f-2a1c1af8aa06",
+        "6f326baa-bbf6-424f-a3dd-1b96e493dc1d",
+        "7aaca07f-f8ab-4409-be59-f53ef5265c6f",
+        "6597686b-297e-4ab8-b311-54920b876abc",
+        "65190534-e595-4f96-876b-5762bf0bf16e",
+        "7992b981-a5cb-4ce9-9e51-c49d637e2a51",
+        "e0d41480-9b54-424c-906a-456ae3f702b4",
+        "75279b64-8d62-42cf-95ae-55525afbd6b7",
+        "90cd3393-ae5d-45a3-a8c1-a1a22d05154a",
+        "719b55bc-b51a-4153-b89d-a21987313c04",
+        "4d4861a5-74ff-498f-80ea-e94d75e1bbf9",
+        "b6bf01fb-1598-436c-8cf4-97b010a54182",
+        "7e0a5928-291b-4a07-a4e9-00785add47a2",
+        "545a2673-911b-4568-818a-4e816194ea9c",
+        "97bf8164-af7e-446a-9f9d-28c628518357"
+      ]
+    },
+    {
+      "query": "site hero de website",
+      "relevant": [
+        "0edb0409-c8bc-4f28-97ed-0dc06ffbcd4d",
+        "97da34e4-9cc0-4078-9289-c8a170de2109",
+        "2b02f853-680c-4efb-b834-80c538738702",
+        "57fabd3e-c3a9-41ee-8c7d-d20dcd7a457d",
+        "85c4d334-9363-4418-a111-29400ec2ad47",
+        "139a0a8c-e3c8-4a3d-9983-c9d08cd735d9",
+        "bf284be5-f114-4fab-bb7f-2a1c1af8aa06",
+        "6f326baa-bbf6-424f-a3dd-1b96e493dc1d",
+        "6597686b-297e-4ab8-b311-54920b876abc",
+        "545a2673-911b-4568-818a-4e816194ea9c",
+        "97bf8164-af7e-446a-9f9d-28c628518357"
+      ]
+    },
+    {"query": "logos verdes", "relevant": []},
+    {"query": "carro app logo azul", "relevant": []}
+  ],
+  "qualitative": [
+    "interface de aplicativo de carro que tinha uma logo azul",
+    "vídeos que têm hook que gera criatividade",
+    "logos verdes"
+  ]
+}

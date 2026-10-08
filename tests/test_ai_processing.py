@@ -8,7 +8,17 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-from queep.ai import AI, SPACE, AIError, document, generated_title, headline_title
+from queep.ai import (
+    AI,
+    CHECKER_BUDGET,
+    CHECKER_TIMEOUT,
+    SPACE,
+    AIError,
+    document,
+    generated_title,
+    headline_title,
+    select_vision_frames,
+)
 from queep.budget import Budget
 from queep.config import database
 from queep.jobs import Jobs
@@ -214,6 +224,20 @@ def test_worker_routes_are_private_and_not_in_public_api():
     assert not any(path.startswith("/tasks") for path in public_app.openapi()["paths"])
 
 
+def test_checked_in_openapi_matches_the_app():
+    import json
+    from pathlib import Path
+
+    saved = json.loads(Path("contracts/openapi.json").read_text())
+    assert saved == public_app.openapi()
+    image = saved["components"]["schemas"]["ImageInfo"]["properties"]
+    assert image["preview_kind"]["enum"] == ["photo", "video", "gif"]
+    assert image["motion"]["default"] is False
+    retry = saved["components"]["schemas"]["RetryAnalysis"]["properties"]
+    assert retry["scope"]["default"] == "fetch"
+    assert "media_incomplete" in saved["components"]["schemas"]["Reference"]["properties"]
+
+
 def fake_client(value):
     calls, settled = [], []
     def respond(request):
@@ -246,10 +270,121 @@ def test_partial_link_does_not_invent_or_fetch_site(library):
     assert result.limitations and not result.usefulness and not calls
 
 
+def test_checker_timeout_releases_the_budget_placeholder(library):
+    *_, ref = library
+    seen = {}
+
+    def post(_path, json, timeout):
+        seen["timeout"] = timeout
+        raise httpx.ReadTimeout("slow checker")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_timeout"):
+        ai.verify("interface", [ref])
+    assert seen["timeout"] == CHECKER_TIMEOUT == 20
+    assert settled[0][1] == 0.0
+
+
+def test_checker_provider_error_without_usage_releases_the_placeholder(library):
+    *_, ref = library
+
+    def post(_path, json, timeout):
+        raise httpx.ConnectError("down")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_unavailable"):
+        ai.verify("interface", [ref])
+    assert settled[0][1] == 0.0
+
+
+def test_checker_http_error_with_usage_keeps_the_reported_cost(library):
+    *_, ref = library
+
+    class Response:
+        is_error = True
+        status_code = 503
+
+        def json(self):
+            return {"error": {"message": "busy"}, "usage": {"cost": 0.002}}
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=lambda *_a, **_k: Response()))
+    with pytest.raises(AIError, match="provider_http_503"):
+        ai.verify("interface", [ref])
+    assert settled[0][1] == 0.002
+
+
+def test_provider_error_without_usage_keeps_the_placeholder():
+    def post(_path, json, timeout):
+        raise httpx.ConnectError("down")
+
+    settled = []
+    budget = SimpleNamespace(reserve=lambda: "ticket", settle=lambda *args: settled.append(args))
+    ai = AI("unused", budget, SimpleNamespace(post=post))
+    with pytest.raises(AIError, match="provider_unavailable"):
+        ai.embed("interface")
+    assert settled[0][1] is None
+
+
+def test_vision_budget_reserves_room_for_clip_frames():
+    posters = [b"p1", b"p2", b"p3", b"p4"]
+    clips = [b"c1", b"c2", b"c3"]
+    assert select_vision_frames(posters, clips) == [b"p1", *clips]
+    assert select_vision_frames(posters, []) == posters
+    assert select_vision_frames([], clips) == clips
+    assert select_vision_frames(posters[:2], clips[:1]) == [b"p1", b"p2", b"c1"]
+    assert select_vision_frames(posters, [b"c"] * 5) == [b"c"] * 4
+
+
+def test_clip_frames_stay_in_the_vision_budget_after_posters(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    posters = [picture(color) for color in ("white", "red", "blue", "green")]
+    clips = [b"clip-frame-1", b"clip-frame-2", b"clip-frame-3"]
+    urls = [f"https://pbs.twimg.com/media/{index}.jpg" for index in range(4)]
+    seen = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            return ImageInfo(
+                sha256="a" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind,
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda url: posters[urls.index(url)])
+    monkeypatch.setattr("queep.worker.read_social_clip", lambda _url: b"mp4")
+    monkeypatch.setattr("queep.worker.social_evidence", lambda _data: SimpleNamespace(
+        audio=None, frames=[(0.2, clips[0]), (0.5, clips[1]), (0.8, clips[2])]))
+    ai = SimpleNamespace(
+        interpret=lambda _ref, data=None: seen.append(data) or ANALYSIS,
+        embed=lambda _text: VECTOR,
+    )
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            {"url": urls[0], "kind": "video",
+             "clip_url": "https://video.twimg.com/amplify_video/clip.mp4"},
+            *({"url": url, "kind": "photo"} for url in urls[1:]),
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert seen == [[posters[0], *clips]]
+
+
 def test_search_rejects_ids_outside_candidates(library):
     *_, ref = library
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [str(uuid4())]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [4]})}}]})
     with pytest.raises(AIError, match="invalid_selection"):
         ai.verify("CRM", [ref])
 
@@ -259,7 +394,7 @@ def test_explicit_media_kind_rejects_inconsistent_model_selection(library):
     audio = ref.model_copy(update={"id": "audio", "kind": "audio"})
     video = ref.model_copy(update={"id": "video", "kind": "video"})
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "video", "ids": ["audio", "video"]})}}]})
+        "content": json.dumps({"requested_kind": "video", "indices": [0, 1]})}}]})
     assert ai.verify("Vídeos sobre esta ferramenta", [audio, video]) == ["video"]
 
 
@@ -292,7 +427,7 @@ def test_link_content_reaches_ai_embedding_verification_and_persistence(library)
     assert "synchronous and async" in calls[0]["messages"][1]["content"][0]["text"]
     assert "synchronous and async" in documents[0]
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("Cliente HTTP Python assíncrono", [current]) == [current.id]
     assert "synchronous and async" in requests[0]["messages"][1]["content"]
     assert json.loads(requests[0]["messages"][1]["content"])["candidates"][0]["kind"] == "link"
@@ -809,7 +944,7 @@ def test_post_visuals_reach_embedding_and_verification(library, monkeypatch):
     stored = repo.get(uid, ref.id)
     assert stored.title == "Mesa mixer faders coloridos"
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [stored.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("mesa de mixer com faders", [stored]) == [stored.id]
     candidate = json.loads(requests[0]["messages"][1]["content"])["candidates"][0]
     assert candidate["image_description"]["appearance"] == ["mesa de som digital",
@@ -902,6 +1037,229 @@ def test_first_video_clip_speech_reaches_interpreter(library, monkeypatch):
     assert repo.get(uid, ref.id).transcript == "fala do autor"
 
 
+def test_public_clip_is_stored_as_muted_motion(library, monkeypatch):
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    poster = picture("blue")
+    loop = b"muted-loop" + b"\x00" * 64
+    stored_motion = []
+
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            stored_motion.append(motion)
+            return ImageInfo(
+                sha256="v" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind, motion=bool(motion),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    monkeypatch.setattr("queep.worker.read_photo", lambda _url: poster)
+    monkeypatch.setattr("queep.worker.read_social_clip", lambda _url: b"mp4-bytes")
+    monkeypatch.setattr("queep.worker.preview_loop", lambda _data: loop)
+    monkeypatch.setattr("queep.worker.social_evidence", lambda _data: SimpleNamespace(
+        audio=None, frames=[]))
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [{
+            "url": "https://pbs.twimg.com/ext_tw_video_thumb/poster.jpg",
+            "kind": "video",
+            "clip_url": "https://video.twimg.com/amplify_video/clip.mp4",
+        }]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
+    assert stored_motion == [loop]
+    assert repo.get(uid, ref.id).images[0].motion is True
+
+
+def _preview_store():
+    class Photos:
+        def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
+            return ImageInfo(
+                sha256="a" * 64, content_type="image/jpeg", width=900, height=600,
+                byte_count=len(data), preview_kind=preview_kind, motion=bool(motion),
+            )
+
+        def read(self, uid, ref_id, thumbnail=False):
+            raise HTTPException(404, "Imagem não encontrada")
+
+    return Photos()
+
+
+def test_swallowed_post_media_is_not_published_as_full_ready(library, monkeypatch):
+    from queep.sources import SourceError
+    from queep.worker import MISSED_POST_MEDIA
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+
+    def fail_photo(_url):
+        raise SourceError("http")
+
+    monkeypatch.setattr("queep.worker.read_photo", fail_photo)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/missing.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.status == "ready" and stored.media_incomplete is True
+    assert stored.analysis.coverage == "partial"
+    assert MISSED_POST_MEDIA in stored.analysis.limitations
+    assert stored.images is None
+
+
+def test_empty_read_is_flagged_without_calling_it_a_missed_photo(library):
+    from queep.worker import MISSED_POST_MEDIA
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://onepromptdesign.com"))
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="page", state="unavailable", url="https://onepromptdesign.com",
+            fetched_at=datetime.now(UTC), limitations=["A página não pôde ser lida."],
+        ), None
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.media_incomplete is True
+    assert stored.analysis.coverage == "full"
+    assert MISSED_POST_MEDIA not in stored.analysis.limitations
+
+
+def test_author_only_reel_is_flagged_and_a_caption_is_not(library):
+    repo, jobs, uid, _ = library
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+    bare = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://www.instagram.com/reel/AbC_12/"))
+
+    def empty(_url):
+        return SourceContent(
+            content_kind="metadata", state="read", url="https://www.instagram.com/reel/AbC_12/",
+            title="nike", text="", author_handle="nike", fetched_at=datetime.now(UTC),
+        ), None
+
+    assert process(task_for(repo, jobs, uid, bare), jobs, ai, _preview_store(), empty) == "ready"
+    assert repo.get(uid, bare.id).media_incomplete is True
+    caption = repo.save(uid, str(uuid4()), Capture(
+        kind="link", url="https://www.instagram.com/p/CfwXgNprcSA/"))
+
+    def text_only(_url):
+        return SourceContent(
+            content_kind="metadata", state="read",
+            url="https://www.instagram.com/p/CfwXgNprcSA/",
+            title="nike", text="A public caption with enough words.",
+            fetched_at=datetime.now(UTC),
+        ), None
+
+    assert process(
+        task_for(repo, jobs, uid, caption), jobs, ai, _preview_store(), text_only) == "ready"
+    assert repo.get(uid, caption.id).media_incomplete is False
+
+
+def test_retry_reprocesses_a_ready_gap_and_rejects_a_second_call(library, monkeypatch):
+    from queep.sources import SourceError
+    from tests.test_images import picture
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://x.com/a/status/1"))
+    photo = picture()
+    failed = {"value": True}
+
+    def read_photo(_url):
+        if failed["value"]:
+            raise SourceError("http")
+        return photo
+
+    monkeypatch.setattr("queep.worker.read_photo", read_photo)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return source_fixture().model_copy(update={"content_kind": "metadata"}), [
+            "https://pbs.twimg.com/media/one.jpg",
+        ]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    assert repo.get(uid, ref.id).media_incomplete is True
+    retried = jobs.retry(uid, ref.id, 1)
+    assert retried.status == "queued" and retried.media_incomplete is False
+    assert repo.job(uid, ref.id).get().to_dict()["scope"] == "fetch"
+    with pytest.raises(HTTPException) as inflight:
+        jobs.retry(uid, ref.id, 1)
+    assert inflight.value.status_code == 409
+    failed["value"] = False
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.status == "ready" and stored.media_incomplete is False
+    assert stored.analysis.coverage == "full"
+
+
+def test_retry_accepts_unavailable_and_a_still_video_and_cools_down(library):
+    repo, jobs, uid, ref = library
+    publish(*library)
+    assert jobs.retry(uid, ref.id, 1).status == "ready"
+    site = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://saved.design/"))
+    work = jobs.claim(task_for(repo, jobs, uid, site))
+    assert jobs.finish(work, ANALYSIS, VECTOR, source=SourceContent(
+        content_kind="page", state="unavailable", url="https://saved.design/",
+        fetched_at=datetime.now(UTC),
+    ))
+    queued = jobs.retry(uid, site.id, 1, scope="analysis")
+    assert queued.status == "queued"
+    assert repo.job(uid, site.id).get().to_dict()["scope"] == "analysis"
+    repo.collection(uid).document(site.id).update({
+        "status": "ready", "media_incomplete": False,
+        "fetch_retry_at": datetime.now(UTC),
+        "images": [{
+            "sha256": "b" * 64, "content_type": "image/jpeg", "width": 10, "height": 10,
+            "byte_count": 10, "preview_kind": "video", "motion": False,
+        }],
+    })
+    with pytest.raises(HTTPException) as cooled:
+        jobs.retry(uid, site.id, 1)
+    assert cooled.value.status_code == 429
+    assert int(cooled.value.headers["Retry-After"]) >= 1
+    repo.collection(uid).document(site.id).update({
+        "fetch_retry_at": datetime.now(UTC) - timedelta(minutes=11),
+    })
+    assert jobs.retry(uid, site.id, 1).status == "queued"
+    with pytest.raises(HTTPException) as stale:
+        jobs.retry(uid, site.id, 2)
+    assert stale.value.status_code == 409
+
+
+def test_page_preview_failure_does_not_mark_the_post_media_gap(library, monkeypatch):
+    from queep.sources import SourceError
+
+    repo, jobs, uid, _ = library
+    ref = repo.save(uid, str(uuid4()), Capture(kind="link", url="https://cursor.com"))
+
+    def fail(_url):
+        raise SourceError("http")
+
+    monkeypatch.setattr("queep.worker.read_public_image", fail)
+    ai = SimpleNamespace(interpret=lambda _ref, data=None: ANALYSIS, embed=lambda _text: VECTOR)
+
+    def reader(_url):
+        return SourceContent(
+            content_kind="page", state="read", url="https://cursor.com", title="Cursor",
+            text="Editor de codigo.", fetched_at=datetime.now(UTC),
+        ), [{"url": "https://cursor.com/og.png", "kind": "photo"}]
+
+    assert process(task_for(repo, jobs, uid, ref), jobs, ai, _preview_store(), reader) == "ready"
+    stored = repo.get(uid, ref.id)
+    assert stored.analysis.coverage == "full" and stored.media_incomplete is False
+
+
 @pytest.mark.parametrize("kind", ["link", "image"])
 def test_ten_long_sources_fit_verifier_input_budget(library, kind):
     *_, ref = library
@@ -913,10 +1271,40 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
                                  "url": "https://example.com/" + "x" * 2000,
                                  "analysis": analysis}) for _ in range(10)]
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": '{"requested_kind":"any","ids":[]}'}}]})
+        "content": '{"requested_kind":"any","indices":[]}'}}]})
     assert ai.verify("Encontre uma referência", refs) == []
-    assert len(calls[0]["messages"][1]["content"].encode()) <= 19500
+    body = calls[0]["messages"][1]["content"]
+    assert len(body.encode()) <= CHECKER_BUDGET
+    assert '"i":0' in body and refs[0].id not in body
+    assert calls[0]["max_tokens"] == 300
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    assert "indices" in schema["properties"] and "ids" not in schema["properties"]
+    assert len(calls[0]["messages"][0]["content"]) < 1200
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
+
+
+def test_embedded_text_and_checker_keep_v8_fields(library):
+    *_, ref = library
+    analysis = Interpretation(
+        summary="Landing com hero roxo", coverage="partial", headline="Hero roxo de produto",
+        appearance=["fundo roxo"], ui_types=["landing page", "hero"],
+        colors=["roxo / purple"], brand="Queep", on_screen_text=["Start free"],
+        hook="Uma abertura curta", style="flat")
+    source = source_fixture().model_copy(update={"text": "x" * 4000})
+    current = ref.model_copy(update={"analysis": analysis, "source": source, "text": "nota"})
+    embedded = document(current, analysis)
+    assert "roxo / purple" in embedded and "landing page" in embedded
+    assert "Start free" in embedded and "fundo roxo" in embedded
+    assert embedded.index("Cores") < embedded.index("Página")
+    assert len(embedded.encode()) <= 6800
+    ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
+    assert ai.verify("roxo", [current]) == [current.id]
+    candidate = json.loads(calls[0]["messages"][1]["content"])["candidates"][0]
+    assert candidate["colors"] == ["roxo / purple"]
+    assert candidate["ui_types"] == ["landing page", "hero"]
+    assert candidate["on_screen_text"] == ["Start free"]
+    assert candidate["brand"] == "Queep"
 
 
 def test_process_stores_site_preview_without_vision_frames(library, monkeypatch):
@@ -963,7 +1351,7 @@ def test_process_stores_site_preview_without_vision_frames(library, monkeypatch)
     assert process(task_for(repo, jobs, uid, ref), jobs, ai, Photos(), reader) == "ready"
     stored = repo.get(uid, ref.id)
     assert seen[:2] == ["author", "gallery"]
-    assert seen[2] == ("interpret", None)
+    assert seen[2] == ("interpret", [preview])
     assert stored.author_image.sha256 == "b" * 64
     assert stored.images[0].sha256 == "a" * 64
     assert stored.source.title == "Cursor"

@@ -66,6 +66,9 @@ def candidate(reference, analysis):
     if reference["kind"] == "image":
         value["image_description"] = {
             key: analysis[key] for key in ("summary", "appearance", "entities", "limitations")}
+        for key in ("ui_types", "colors", "brand", "on_screen_text", "hook", "style"):
+            if analysis.get(key):
+                value["image_description"][key] = analysis[key]
     return value
 
 
