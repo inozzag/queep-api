@@ -287,7 +287,7 @@ def test_provider_error_without_usage_keeps_the_placeholder():
 def test_search_rejects_ids_outside_candidates(library):
     *_, ref = library
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [str(uuid4())]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [4]})}}]})
     with pytest.raises(AIError, match="invalid_selection"):
         ai.verify("CRM", [ref])
 
@@ -297,7 +297,7 @@ def test_explicit_media_kind_rejects_inconsistent_model_selection(library):
     audio = ref.model_copy(update={"id": "audio", "kind": "audio"})
     video = ref.model_copy(update={"id": "video", "kind": "video"})
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "video", "ids": ["audio", "video"]})}}]})
+        "content": json.dumps({"requested_kind": "video", "indices": [0, 1]})}}]})
     assert ai.verify("Vídeos sobre esta ferramenta", [audio, video]) == ["video"]
 
 
@@ -330,7 +330,7 @@ def test_link_content_reaches_ai_embedding_verification_and_persistence(library)
     assert "synchronous and async" in calls[0]["messages"][1]["content"][0]["text"]
     assert "synchronous and async" in documents[0]
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("Cliente HTTP Python assíncrono", [current]) == [current.id]
     assert "synchronous and async" in requests[0]["messages"][1]["content"]
     assert json.loads(requests[0]["messages"][1]["content"])["candidates"][0]["kind"] == "link"
@@ -847,7 +847,7 @@ def test_post_visuals_reach_embedding_and_verification(library, monkeypatch):
     stored = repo.get(uid, ref.id)
     assert stored.title == "Mesa mixer faders coloridos"
     verifier, requests, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [stored.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert verifier.verify("mesa de mixer com faders", [stored]) == [stored.id]
     candidate = json.loads(requests[0]["messages"][1]["content"])["candidates"][0]
     assert candidate["image_description"]["appearance"] == ["mesa de som digital",
@@ -951,10 +951,14 @@ def test_ten_long_sources_fit_verifier_input_budget(library, kind):
                                  "url": "https://example.com/" + "x" * 2000,
                                  "analysis": analysis}) for _ in range(10)]
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": '{"requested_kind":"any","ids":[]}'}}]})
+        "content": '{"requested_kind":"any","indices":[]}'}}]})
     assert ai.verify("Encontre uma referência", refs) == []
-    assert len(calls[0]["messages"][1]["content"].encode()) <= CHECKER_BUDGET
-    assert calls[0]["max_tokens"] == 160
+    body = calls[0]["messages"][1]["content"]
+    assert len(body.encode()) <= CHECKER_BUDGET
+    assert '"i":0' in body and refs[0].id not in body
+    assert calls[0]["max_tokens"] == 300
+    schema = calls[0]["response_format"]["json_schema"]["schema"]
+    assert "indices" in schema["properties"] and "ids" not in schema["properties"]
     assert len(calls[0]["messages"][0]["content"]) < 1200
     assert len(document(refs[0], ANALYSIS).encode()) < 7000
 
@@ -974,7 +978,7 @@ def test_embedded_text_and_checker_keep_v8_fields(library):
     assert embedded.index("Cores") < embedded.index("Página")
     assert len(embedded.encode()) <= 6800
     ai, calls, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": "any", "ids": [current.id]})}}]})
+        "content": json.dumps({"requested_kind": "any", "indices": [0]})}}]})
     assert ai.verify("roxo", [current]) == [current.id]
     candidate = json.loads(calls[0]["messages"][1]["content"])["candidates"][0]
     assert candidate["colors"] == ["roxo / purple"]

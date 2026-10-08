@@ -15,7 +15,8 @@ mostrar a lista maior). Consulta curta sem cor (1–2 palavras: interface, web d
 só nos itens que citam essa cor em `colors`/`brand` ou, em itens antigos, na
 aparência e no texto da leitura; se ninguém cita, voltam 5 quase-acertos, não a
 biblioteca inteira. A conferência roda só na cabeça (6 itens, até 8 KB, timeout
-de 20 s) e só tira contradição explícita; o restante volta sem passar pelo modelo.
+de 20 s). O modelo devolve índices curtos (`[0,2,5]`), não UUIDs, em JSON compacto,
+com teto de 300 tokens. Ela só tira contradição explícita; o restante volta sem passar pelo modelo.
 Se a conferência falha ou estoura o tempo, a lista ordenada volta mesmo assim, a
 busca mensal não é debitada e o tempo esgotado não segura a reserva de US$ 0,01. Revalida revisões e exclusões antes de
 responder. Consultas usam POST para não expor o texto em URLs.

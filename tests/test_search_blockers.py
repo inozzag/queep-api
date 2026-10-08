@@ -97,7 +97,8 @@ SELECTED = [item.id for item in LIBRARY]
 ])
 def test_visual_and_video_queries_keep_posts_pages_and_youtube(requested, expected):
     ai, _, _ = fake_client({"choices": [{"finish_reason": "stop", "message": {
-        "content": json.dumps({"requested_kind": requested, "ids": SELECTED})}}]})
+        "content": json.dumps({"requested_kind": requested,
+                               "indices": list(range(len(LIBRARY)))})}}]})
     assert ai.verify("mostre o material", LIBRARY) == expected
 
 

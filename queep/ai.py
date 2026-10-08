@@ -71,13 +71,13 @@ Você recebe só a cabeça da lista. Mantenha tema amplo, menção parcial e cor
 Omita um ID somente quando ele contradiz um pedido explícito: negação, cor errada numa busca
 por cor, objeto errado, ou mídia restrita ("somente/apenas/only vídeos" exclui nota, imagem,
 áudio e página comum; YouTube, Vimeo e posts continuam). "Vídeos sobre X" não esvazia a lista.
-Usar uma plataforma não torna o item uma explicação sobre ela. Um post sobre churn não atende
-uma busca por Twitter. Para imagens, posts e pôsteres use a descrição visual; para links, o
-trecho da página. Fala e speech_excerpt descrevem o áudio, não provam o que aparece na tela.
+Usar uma plataforma não torna o item uma explicação sobre ela. Para imagens e pôsteres use a
+descrição visual; para links, o trecho da página. Fala não prova o que aparece na tela.
 Preencha requested_kind só se a consulta exige note, link, image, audio ou video; senão any.
-"Vídeos sobre X" exige video. Posts, páginas e YouTube são kind=link e atendem busca visual
-ou de vídeo. "Ferramentas para criar vídeos" é any. Áudio não é vídeo. Não invente IDs.
-Se nada contradiz, devolva todos os IDs recebidos.
+"Vídeos sobre X" exige video. Posts, páginas e YouTube são kind=link e atendem busca visual.
+"Ferramentas para criar vídeos" é any. Áudio não é vídeo.
+Responda JSON compacto numa linha. indices são os i dos candidatos, não UUIDs.
+Se nada contradiz, devolva todos os índices.
 """
 
 
@@ -461,8 +461,8 @@ coverage deve ser partial. Resumo de até duas frases; limitações somente conc
         if not references:
             return []
         candidates = []
-        for ref in references:
-            item = {"id": ref.id, "kind": ref.kind,
+        for index, ref in enumerate(references):
+            item = {"i": index, "kind": ref.kind,
                     "title": clip(ref.title, 120), "text": clip(ref.text, 240),
                     "url": clip(ref.url or "", 120), "excerpt_only": len(ref.text.encode()) > 240,
                     "source_coverage": ref.analysis.coverage if ref.analysis else "partial"}
@@ -498,32 +498,41 @@ coverage deve ser partial. Resumo de até duas frases; limitações somente conc
                 if ref.transcript:
                     item["speech_excerpt"] = evidence(ref.transcript, query, 400)
             candidates.append(item)
-        ids = [ref.id for ref in references]
         payload = {"query": query, "candidates": candidates}
         # Worst-case escaping and a rich head must still fit. Smaller input is what
-        # keeps a typical check inside CHECKER_TIMEOUT.
-        while len(json.dumps(payload, ensure_ascii=False).encode()) > CHECKER_BUDGET:
+        # keeps a typical check inside CHECKER_TIMEOUT. Separators stay off so the
+        # model is shown the compact shape it should answer with.
+        encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        while len(encoded) > CHECKER_BUDGET:
             index = max(range(len(candidates)), key=lambda i: len(json.dumps(candidates[i])))
             candidates[index] = shorten(candidates[index])
+            encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         value = self.chat(VERIFIER, VERIFY_PROMPT,
-                          json.dumps(payload, ensure_ascii=False),
+                          json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
                           {"type": "object", "additionalProperties": False,
-                           "required": ["requested_kind", "ids"],
+                           "required": ["requested_kind", "indices"],
                            "properties": {"requested_kind": {"type": "string", "enum": [
                                "any", "note", "link", "image", "audio", "video"]},
-                               "ids": {"type": "array", "maxItems": len(ids),
-                                                  "items": {"type": "string", "enum": ids}}}},
-                          "search_verification", max_tokens=160, timeout=CHECKER_TIMEOUT)
+                               "indices": {"type": "array", "maxItems": len(references),
+                                           "items": {"type": "integer", "minimum": 0,
+                                                     "maximum": max(0, len(references) - 1)}}}},
+                          "search_verification", max_tokens=300, timeout=CHECKER_TIMEOUT)
         try:
-            selected = value["ids"]
+            selected = value["indices"]
             kind = value["requested_kind"]
-            if (set(value) != {"ids", "requested_kind"}
+            if (set(value) != {"indices", "requested_kind"}
                     or kind not in ("any", "note", "link", "image", "audio", "video")
-                    or not isinstance(selected, list)
-                    or len(selected) != len(set(selected)) or not set(selected).issubset(ids)):
-                raise ValueError("ids")
+                    or not isinstance(selected, list)):
+                raise ValueError("indices")
+            chosen = []
+            for index in selected:
+                if type(index) is not int or not 0 <= index < len(references):
+                    raise ValueError("indices")
+                chosen.append(references[index].id)
+            if len(chosen) != len(set(chosen)):
+                raise ValueError("indices")
             by_id = {ref.id: ref for ref in references}
-            return [identifier for identifier in selected
+            return [identifier for identifier in chosen
                     if matches_requested_kind(kind, by_id[identifier])]
         except (KeyError, TypeError, ValueError) as exc:
             raise AIError("invalid_selection") from exc
