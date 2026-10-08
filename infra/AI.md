@@ -57,6 +57,47 @@ cobertura parcial e limites descritos em [SOURCES.md](SOURCES.md).
 [MEDIA.md](MEDIA.md). Busca exaustiva, filtro textual complementar e localização de
 trechos longos permanecem fora desta entrega.
 
+## Releitura para a v8
+
+Itens antigos continuam no espaço `gemini-embedding-2:768:document-v1` (768 dimensões).
+O comando abaixo regrava a leitura ou só o vetor. O padrão é dry-run: imprime o
+plano e o custo, sem chamar modelo e sem gravar. Não há credencial neste
+repositório; rode numa máquina com ADC no projeto `queep-dev-hstlx`.
+
+```sh
+# plano (não grava)
+uv run --env-file .env.evaluation python -m queep.backfill --uid UID
+
+# só o vetor, a partir dos campos já salvos (aparência e nota incluídas).
+# Não marca analysis_version, então uma leitura completa depois ainda ocorre.
+uv run --env-file .env.evaluation python -m queep.backfill --uid UID --reembed-only --apply --max-cost-usd 0.05
+
+# enfileira no worker já publicado. A coleção é QUEEP_JOB_COLLECTION
+# (jobs no dev, jobs_testflight no TestFlight). O worker relê a página,
+# manda a imagem de preview e publica a v8. --enqueue --dry-run só mostra.
+uv run --env-file .env.evaluation python -m queep.backfill --uid UID --enqueue
+```
+
+Variáveis: `QUEEP_ENV=production`, `GOOGLE_CLOUD_PROJECT=queep-dev-hstlx`,
+`QUEEP_STORAGE_BUCKET` do mesmo projeto, `QUEEP_AI_ENABLED=true` e
+`OPENROUTER_API_KEY` só no `--apply` local. Sem `FIRESTORE_EMULATOR_HOST` nem
+as outras variáveis de emulador. `--apply` local não baixa a imagem de preview;
+páginas com leitura vazia precisam de `--enqueue` depois que o worker v8 estiver
+no ar. `--limit` corta a leva. `--force` inclui quem já está na v8. Itens
+apagados, em fila ou em processamento ficam de fora. Uma falha de item não
+interrompe a leva. A segunda execução pula quem já chegou na v8 (ou, no modo
+barato, quem já tem `embedding_build=queep-embed-v8-fields`).
+
+Custo estimado do provedor, não a reserva: US$ 0,0035 por post/página,
+US$ 0,010 por vídeo/reel (transcrição + visão) e US$ 0,0002 no `--reembed-only`.
+Para as 58 referências do acervo (53 posts/páginas e 5 clipes): cerca de
+US$ 0,24 na leitura completa e US$ 0,012 só no vetor. Cada chamada reserva
+US$ 0,01 em `ai_budget/{data}` antes do acerto (US$ 0,02 por item comum,
+US$ 0,04 por clipe). Com o teto de US$ 1/dia, a leitura completa para por volta
+de 50 itens e continua no dia seguinte. `--max-cost-usd` (padrão 0,50) é um
+segundo teto, pelo custo estimado. O comando também lê `used` do dia e não
+começa um item que não caiba na reserva.
+
 ## Publicar
 
 1. `uv run --env-file .env.evaluation python infra/prepare-ai-dev.py` cria identidades,
