@@ -21,8 +21,10 @@ SPACE = "gemini-embedding-2:768:document-v1"
 ANALYSIS_VERSION = "queep-interpretation-v8"
 # One paid vision call. Clip samples must fit here; they are not a fifth image.
 VISION_FRAME_LIMIT = 4
-INTERPRETER = {"id": "google/gemini-2.5-flash-lite", "provider": "google-vertex",
-               "prompt": .1, "completion": .4, "reasoning": {"enabled": False}}
+# OpenRouter dropped the google-vertex route for gemini-2.5-flash-lite on 2026-10-20;
+# every pinned call returned 404. 3.1 Flash-Lite keeps a ZDR Vertex route.
+INTERPRETER = {"id": "google/gemini-3.1-flash-lite", "provider": "google-vertex/global",
+               "prompt": .25, "completion": 1.5, "reasoning": {"effort": "minimal"}}
 VERIFIER = {"id": "google/gemini-3.1-flash-lite", "provider": "google-vertex/global",
             "prompt": .25, "completion": 1.5, "reasoning": {"effort": "minimal"}}
 # Successful checks on the owner library took 16–36s when the head was ~19.5 KB.
@@ -59,6 +61,8 @@ tipografia, ilustração, anúncio, social post, vídeo, other.
 colors: cores dominantes observadas, cada uma em português e inglês ("roxo / purple").
 Vazio se não houver cor na imagem ou no texto. brand: marca ou app visível, senão vazio.
 on_screen_text: até 6 citações curtas do texto visível; não invente.
+screen_text_ocr é o texto lido por OCR no aparelho: use para on_screen_text e corrija
+pela imagem. pixel_colors_hex são as cores medidas nos pixels: nomeie-as em colors.
 Em vídeo: hook é a frase que puxa atenção; style é o estilo visual ou de edição.
 transcript_summary: até 2 frases do que foi falado, somente se houver transcrição.
 headline: exatamente seis palavras em português
@@ -228,7 +232,8 @@ def _ui_types(value):
     return found
 
 
-def source(reference):
+def source(reference, reading=None):
+    """Model input. ``reading`` is the optional DeviceReading made on the user's device."""
     raw = {"title": clip(reference.title, 800), "text": clip(reference.text, 8000),
            "url": clip(reference.url or "", 2000)}
     raw["source_coverage"] = "partial" if (
@@ -251,6 +256,10 @@ def source(reference):
             raw["product_name"] = clip(reference.source.title, 200)
     if reference.transcript:
         raw["speech"] = clip(reference.transcript, 4000)
+    if reading and reading.screen_text:
+        raw["screen_text_ocr"] = clip(reading.screen_text, 3000)
+    if reading and reading.colors:
+        raw["pixel_colors_hex"] = reading.colors
     return raw
 
 
@@ -364,8 +373,8 @@ class AI:
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AIError("invalid_json") from exc
 
-    def interpret(self, reference, image=None):
-        raw = source(reference)
+    def interpret(self, reference, image=None, reading=None):
+        raw = source(reference, reading)
         frames = image if isinstance(image, list) else ([image] if image else [])
         if (reference.kind == "link" and not raw.get("page_text") and not frames
                 and not raw.get("speech")):
@@ -454,13 +463,14 @@ transcript só pode estar vazio se nenhuma fala do autor for identificável. Lim
             raise AIError("invalid_media_interpretation") from exc
         return text or None
 
-    def interpret_media(self, reference, evidence):
-        transcript = ""
+    def interpret_media(self, reference, evidence, transcript=""):
+        """``transcript`` comes from the device; when present no paid transcription runs."""
+        transcript = (transcript or "").strip()
         analysis = Interpretation(summary="Mídia sem fala identificada.", coverage="partial")
-        if evidence.audio:
+        if evidence.audio or transcript:
             # Transcription has a dedicated contract. Combining it with a summary
             # allowed this model to return accurate summaries with empty transcripts.
-            transcript = self.transcribe_speech(evidence.audio) or ""
+            transcript = transcript or self.transcribe_speech(evidence.audio) or ""
             if transcript.strip():
                 spoken = reference.model_copy(update={"kind": "note", "text": transcript,
                                                        "media": None, "source": None, "url": None})

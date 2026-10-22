@@ -124,6 +124,29 @@ class MediaInfo(BaseModel):
     loop: bool = False
 
 
+class TranscriptSegment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    start: float = Field(ge=0, le=301)
+    text: str = Field(max_length=500)
+
+
+class DeviceReading(BaseModel):
+    """What an Apple device read before uploading an image or media file."""
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    screen_text: str = Field(default="", max_length=8000)
+    transcript: str = Field(default="", max_length=18000)
+    segments: list[TranscriptSegment] = Field(default_factory=list, max_length=600)
+    colors: list[str] = Field(default_factory=list, max_length=8)
+    engine: str = Field(default="", max_length=40)
+
+    @model_validator(mode="after")
+    def validate_colors(self):
+        for color in self.colors:
+            if not re.fullmatch(r"#[0-9A-Fa-f]{6}", color):
+                raise ValueError("Colors must be #RRGGBB")
+        return self
+
+
 class Reference(BaseModel):
     id: str
     kind: Literal["note", "link", "image", "audio", "video"]
@@ -143,6 +166,8 @@ class Reference(BaseModel):
     source: SourceContent | None = None
     media: MediaInfo | None = None
     transcript: str | None = Field(default=None, max_length=18000)
+    # Start time of each spoken passage, when the device transcribed the upload.
+    transcript_segments: list[TranscriptSegment] | None = Field(default=None, max_length=600)
     # True when a link was published without the media or page the source offered.
     media_incomplete: bool = False
 
@@ -156,6 +181,8 @@ class Search(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     query: str = Field(min_length=2, max_length=500)
     space_id: UUID | None = None
+    # False when the app checks the head on the device (Apple Foundation Models).
+    verify: bool = True
 
 
 class SearchResults(BaseModel):

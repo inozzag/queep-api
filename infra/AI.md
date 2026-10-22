@@ -31,10 +31,32 @@ formato são separados: ferramentas para criar vídeos não precisam ser arquivo
 
 | Etapa | Modelo / rota |
 | --- | --- |
-| Notas, imagens e texto de links | `google/gemini-2.5-flash-lite` / `google-vertex` |
-| Transcrição e cenas de vídeo, em chamadas separadas | `google/gemini-2.5-flash-lite` / `google-vertex` |
+| Notas, imagens e texto de links | `google/gemini-3.1-flash-lite` / `google-vertex/global` |
+| Transcrição e cenas de vídeo, em chamadas separadas | `google/gemini-3.1-flash-lite` / `google-vertex/global` |
 | Vetores de 768 dimensões | `google/gemini-embedding-2` / `google-vertex/us` |
 | Conferência da busca | `google/gemini-3.1-flash-lite` / `google-vertex/global` |
+
+Em 20/10/2026 a OpenRouter tirou a rota `google-vertex` do `gemini-2.5-flash-lite`; toda
+interpretação passou a voltar 404. A interpretação e a transcrição usam desde então o
+`gemini-3.1-flash-lite` em `google-vertex/global` (ZDR), o mesmo da conferência.
+
+### Leitura no aparelho
+
+Os apps Apple leem no próprio aparelho, sem custo de token, o que vão enviar:
+OCR do Vision (imagens), transcrição do Speech com o início de cada trecho (áudio/vídeo)
+e cores medidas nos pixels. O app manda `PUT /v1/references/{id}/device-reading`
+**antes** do upload do arquivo; o worker lê `users/{uid}/device_readings/{id}`.
+Com transcrição do aparelho, a chamada paga de transcrição não acontece e
+`transcript_segments` fica salvo no item. OCR e cores entram como evidência na
+interpretação, que ainda precisa ver a imagem. Sem leitura, nada muda.
+A leitura expira por TTL em `expires_at` (2 dias); a exclusão da conta apaga a coleção.
+Ativar o TTL uma vez:
+`gcloud firestore fields ttls update expires_at --collection-group=device_readings --enable-ttl --project queep-dev-hstlx`.
+
+`POST /v1/search` aceita `verify: false`: o app confere a cabeça da lista com o
+Foundation Models no aparelho (iPhone 15 Pro ou mais novo, Mac/iPad M1+, com Apple
+Intelligence ativo) e a API não chama o verificador pago. Aparelhos sem o modelo
+continuam com `verify: true`.
 
 Configuração versionada em `queep/ai.py`. Rotas fixas, sem fallback de provedor,
 ZDR exigido e coleta negada. A chave fica em `queep-openrouter`, Secret Manager;
