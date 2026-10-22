@@ -96,6 +96,8 @@ class ImageInfo(BaseModel):
     preview_kind: Literal["photo", "video", "gif"] = "photo"
     # True when a muted looping preview is stored next to the still image.
     motion: bool = False
+    # True when the post's full video with sound is stored too (Pro and Max).
+    clip: bool = False
 
 
 class SourceContent(BaseModel):

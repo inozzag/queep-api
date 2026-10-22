@@ -18,6 +18,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 
 from queep.account_state import is_closed, require_open
 from queep.models import ImageInfo, Reference
+from queep.plans import keeps_post_clips
 from queep.repository import Repository, fingerprint, new_job
 from queep.usage import check_inventory, inventory, policy
 
@@ -34,19 +35,26 @@ _preview_lock = threading.Lock()
 _preview_slots = threading.BoundedSemaphore(2)
 _byte_cache: OrderedDict[str, bytes] = OrderedDict()
 _BYTE_BUDGET = 48 * 1024 * 1024
-STORED_OBJECTS = ("original", "thumbnail", "card", "motion", "loop")
+STORED_OBJECTS = ("original", "thumbnail", "card", "motion", "loop", "clip")
+# A post's full video, as fetched from the source; the same cap as a social clip download.
+MAX_CLIP_BYTES = 25 * 1024 * 1024
 
 
 def richer_preview(current, incoming):
-    """Replace a stored still when the same bytes now have motion or a video kind."""
+    """Replace a stored still when the same bytes now have motion, a clip, or a video kind."""
     if not isinstance(current, dict):
         return None
     current_kind = current.get("preview_kind") or "photo"
     motion_up = bool(incoming.motion) and not current.get("motion")
+    clip_up = bool(incoming.clip) and not current.get("clip")
     kind_up = _KIND_RANK.get(incoming.preview_kind, 0) > _KIND_RANK.get(current_kind, 0)
-    if not motion_up and not kind_up:
+    if not motion_up and not clip_up and not kind_up:
         return None
-    return {**current, **incoming.model_dump()}
+    merged = {**current, **incoming.model_dump()}
+    # An upgrade never forgets what is already stored.
+    merged["motion"] = bool(current.get("motion")) or bool(incoming.motion)
+    merged["clip"] = bool(current.get("clip")) or bool(incoming.clip)
+    return merged
 
 
 @dataclass
@@ -379,25 +387,48 @@ class Images:
                 self.cleanup(uid, ref_id)  # Also handles a late writer racing deletion/expiry.
             raise
 
-    def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None):
-        """Store a public post photo, GIF, or video poster without changing the link kind."""
+    def attach_preview(self, uid, ref_id, data, preview_kind="photo", motion=None, clip=None):
+        """Store a public post photo, GIF, or video poster without changing the link kind.
+
+        A video's full clip, with its sound, is kept only on Pro and Max and only while it fits
+        the storage left; otherwise the post keeps its poster and muted loop.
+        """
         kind = preview_kind if preview_kind in ("photo", "video", "gif") else "photo"
         motion_bytes = motion if isinstance(motion, bytes) else None
         if motion_bytes is None or not 32 <= len(motion_bytes) <= 4 * 1024 * 1024:
             motion_bytes = None
         if kind == "gif" and not motion_bytes:
             kind = "photo"
+        clip_bytes = clip if isinstance(clip, bytes) and kind == "video" else None
+        if clip_bytes is not None and not 32 <= len(clip_bytes) <= MAX_CLIP_BYTES:
+            clip_bytes = None
         try:
             image = self.prepare(data)
         except HTTPException:
             image = self.prepare(as_jpeg(data))
-        info = image.info.model_copy(update={"preview_kind": kind, "motion": bool(motion_bytes)})
         prefix = self.prefix(uid, ref_id, image.info.sha256)
-        self.reserve_preview(uid, ref_id, image, extra=len(motion_bytes or b""))
+        access = policy(self.db, uid)
+        if clip_bytes is not None and not keeps_post_clips(access.plan):
+            clip_bytes = None
+        extras = {"motion": len(motion_bytes or b""), "clip": len(clip_bytes or b"")}
+        try:
+            self.reserve_preview(uid, ref_id, image, extras=extras, access=access)
+        except HTTPException:
+            if clip_bytes is None:
+                raise
+            # A plan near its storage limit still gets the poster and the loop.
+            logger.info("post_clip_over_storage", extra={"uid": uid})
+            clip_bytes = None
+            extras["clip"] = 0
+            self.reserve_preview(uid, ref_id, image, extras=extras, access=access)
+        info = image.info.model_copy(update={
+            "preview_kind": kind, "motion": bool(motion_bytes), "clip": bool(clip_bytes)})
         for name, content, content_type in self.objects(image):
             self.put_object(f"{prefix}/{name}", content, content_type)
         if motion_bytes:
             self.put_object(f"{prefix}/motion", motion_bytes, "video/mp4")
+        if clip_bytes:
+            self.put_object(f"{prefix}/clip", clip_bytes, "video/mp4")
         now = datetime.now(UTC)
         manifest = self.manifest(uid, ref_id)
         doc = self.repo.collection(uid).document(ref_id)
@@ -493,12 +524,18 @@ class Images:
 
         return self.repo.transact(write)
 
-    def reserve_preview(self, uid, ref_id, image, extra=0):
-        """Reserve every live object (including social thumbnails) before Storage writes."""
-        access = policy(self.db, uid)
+    def reserve_preview(self, uid, ref_id, image, extra=0, extras=None, access=None):
+        """Reserve every live object (including social thumbnails) before Storage writes.
+
+        `extras` names optional objects stored beside the picture (`motion`, `clip`). When the
+        picture is already reserved, only the ones it does not have yet are charged.
+        """
+        access = access or policy(self.db, uid)
         manifest = self.manifest(uid, ref_id)
         prefix = self.prefix(uid, ref_id, image.info.sha256)
-        size = sum(len(data) for _, data, _ in self.objects(image)) + max(0, extra)
+        extras = {name: max(0, size) for name, size in (extras or {}).items()}
+        size = (sum(len(data) for _, data, _ in self.objects(image)) + max(0, extra)
+                + sum(extras.values()))
 
         @firestore.transactional
         def reserve(tx):
@@ -513,7 +550,20 @@ class Images:
                 prefixes.append(old["prefix"])
             stock, stored = inventory(self.db, uid, tx)
             if prefix in prefixes:
-                tx.update(manifest, {"settle_at": datetime.now(UTC) + timedelta(minutes=10)})
+                gallery = list(record.get("images") or [])
+                if not gallery and record.get("image"):
+                    gallery = [record["image"]]
+                current = next((item for item in gallery
+                                if item.get("sha256") == image.info.sha256), {})
+                late = sum(amount for name, amount in extras.items()
+                           if amount and not current.get(name))
+                changes = {"settle_at": datetime.now(UTC) + timedelta(minutes=10)}
+                if late:
+                    check_inventory(access, stored, storage_bytes=late)
+                    tx.set(stock, {**stored,
+                                   "storage_bytes": stored.get("storage_bytes", 0) + late})
+                    changes["storage_bytes"] = old.get("storage_bytes", 0) + late
+                tx.update(manifest, changes)
                 return
             check_inventory(access, stored, storage_bytes=size)
             tx.set(stock, {**stored, "storage_bytes": stored.get("storage_bytes", 0) + size})
@@ -553,6 +603,32 @@ class Images:
             if sharp:
                 return sharp, "image/jpeg"
         return data, info.content_type
+
+    def clip(self, uid, ref_id, index=0):
+        """Storage path and size of a post's full video, for playback in ranges."""
+        reference = self.repo.get(uid, ref_id)
+        gallery = reference.images or ([reference.image] if reference.image else [])
+        if not gallery or index < 0 or index >= len(gallery) or not gallery[index].clip:
+            raise HTTPException(404, "Vídeo não encontrado")
+        path = f"{self.prefix(uid, ref_id, gallery[index].sha256)}/clip"
+        try:
+            blob = self.bucket.get_blob(path, timeout=20, retry=None)
+        except GoogleAPICallError as error:
+            raise HTTPException(503, "Não foi possível carregar o vídeo") from error
+        if blob is None or not blob.size:
+            raise HTTPException(404, "Vídeo não encontrado")
+        return path, blob.size
+
+    def clip_bytes(self, path, start, end):
+        """Bytes `start` through `end`, inclusive. Clips skip the in-memory cache: they are large
+        and a player reads them in pieces."""
+        try:
+            return self.bucket.blob(path).download_as_bytes(
+                start=start, end=end, timeout=30, retry=None)
+        except NotFound as error:
+            raise HTTPException(404, "Vídeo não encontrado") from error
+        except GoogleAPICallError as error:
+            raise HTTPException(503, "Não foi possível carregar o vídeo") from error
 
     def _download(self, path):
         cached = recall_bytes(path)

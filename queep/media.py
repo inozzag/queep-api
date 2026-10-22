@@ -169,6 +169,22 @@ def _encode_loop(source, target, edge, crf):
     return target.read_bytes()
 
 
+def playable_clip(data: bytes) -> bytes | None:
+    """A post's full mp4, kept for playback with sound when it fits the upload limits:
+    H.264, at most five minutes and 25 MiB. Anything else returns None and the post keeps
+    only its loop."""
+    if not data or len(data) > MAX_BYTES:
+        return None
+    with tempfile.TemporaryDirectory(prefix="queep-clip-") as folder:
+        source = Path(folder) / "clip.mp4"
+        source.write_bytes(data)
+        try:
+            _, video, _ = probe(source)
+        except HTTPException:
+            return None
+    return data if video else None
+
+
 def preview_loop(data: bytes) -> bytes | None:
     """Muted H.264 gallery preview: the whole GIF, or the first 8 seconds of a video."""
     if not data or len(data) < 32 or len(data) > MAX_BYTES:

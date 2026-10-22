@@ -23,6 +23,11 @@ def month_window(now=None):
     return now, reset
 
 
+def keeps_post_clips(plan):
+    """Pro and Max keep a post's full video with its sound; Free keeps the 8-second muted loop."""
+    return plan in ("pro", "max")
+
+
 def features(plan):
     return {"spaces": plan != "free", "media_av": plan == "max"}
 

@@ -27,7 +27,7 @@ from queep.cost_context import attribution
 from queep.dispatch import enqueue
 from queep.images import Images, animated_gif, as_jpeg, as_stored_image
 from queep.jobs import Jobs
-from queep.media import MediaFiles, evidence, preview_loop, social_evidence
+from queep.media import MediaFiles, evidence, playable_clip, preview_loop, social_evidence
 from queep.models import Interpretation
 from queep.social import is_profile, owner
 from queep.sources import (
@@ -237,6 +237,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                         photo = load_photo(preview["url"])
                         clip_bytes = None
                         motion = None
+                        playable = None
                         raw_kind = preview["kind"]
                         kind = raw_kind if raw_kind in ("photo", "video", "gif") else "photo"
                         if kind in ("video", "gif") and preview.get("clip_url"):
@@ -250,16 +251,22 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                             if clip_bytes:
                                 if evidence_clip is None:
                                     evidence_clip = clip_bytes
-                                # Public clip bytes become ImageInfo.motion (muted loop).
-                                # 14ef461's separate /clip object is not stored.
+                                # The muted loop plays in the gallery; the full clip, with its
+                                # sound, plays in the opened post on Pro and Max (Images decides).
                                 motion = preview_loop(clip_bytes)
+                                if kind == "video":
+                                    playable = playable_clip(clip_bytes)
                         elif animated_gif(photo):
                             kind = "gif"
                             motion = preview_loop(photo)
                             photo = as_jpeg(photo)
                         if kind == "gif" and not motion:
                             kind = "photo"
-                        if motion:
+                        if motion and playable:
+                            info = images.attach_preview(
+                                work["uid"], ref.id, photo, preview_kind=kind, motion=motion,
+                                clip=playable)
+                        elif motion:
                             info = images.attach_preview(
                                 work["uid"], ref.id, photo, preview_kind=kind, motion=motion)
                         else:

@@ -366,13 +366,58 @@ def read_media(ref_id: UUID, uid: UID, thumbnail: bool = False, loop: bool = Fal
 @app.get("/v1/references/{ref_id}/image", responses={200: {"content": {
     "image/jpeg": {}, "image/png": {}, "video/mp4": {},
 }}})
-def read_image(ref_id: UUID, uid: UID, media: Media, thumbnail: bool = False,
+def read_image(ref_id: UUID, uid: UID, media: Media, request: Request, thumbnail: bool = False,
                index: Annotated[int, Query(ge=0, le=3)] = 0,
-               role: Annotated[Literal["gallery", "author"], Query()] = "gallery",
+               role: Annotated[Literal["gallery", "author", "clip"], Query()] = "gallery",
                motion: bool = False):
+    if role == "clip":
+        if thumbnail or motion:
+            raise HTTPException(404, "Vídeo não encontrado")
+        return clip_response(media, uid, str(ref_id), index, request.headers.get("range"))
     data, content_type = media.read(uid, str(ref_id), thumbnail, index, role, motion)
     return Response(content=data, media_type=content_type,
                     headers={"Content-Disposition": "inline"})
+
+
+CLIP_CHUNK = 4 * 1024 * 1024
+
+
+def clip_range(header, size):
+    """The byte span a `Range: bytes=…` header asks for, capped at one chunk; None for the whole
+    file. A range that cannot be served raises 416."""
+    if not header:
+        return None
+    unit, _, spec = header.partition("=")
+    first, _, last = spec.split(",")[0].strip().partition("-")
+    try:
+        if unit.strip() != "bytes" or not (first or last):
+            raise ValueError
+        if first:
+            start = int(first)
+            end = int(last) if last else size - 1
+        else:
+            start, end = max(0, size - int(last)), size - 1
+    except ValueError:
+        raise HTTPException(416, "Intervalo inválido",
+                            headers={"Content-Range": f"bytes */{size}"}) from None
+    if start >= size or end < start:
+        raise HTTPException(416, "Intervalo inválido", headers={"Content-Range": f"bytes */{size}"})
+    return start, min(end, size - 1, start + CLIP_CHUNK - 1)
+
+
+def clip_response(media, uid, ref_id, index, header):
+    """A post's full video. Players read it in ranges, so a whole 25 MiB file never sits in one
+    response unless the client asks for it without a range."""
+    path, size = media.clip(uid, ref_id, index)
+    span = clip_range(header, size)
+    headers = {"Content-Disposition": "inline", "Accept-Ranges": "bytes"}
+    if span is None:
+        return Response(content=media.clip_bytes(path, 0, size - 1), media_type="video/mp4",
+                        headers=headers)
+    start, end = span
+    headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return Response(content=media.clip_bytes(path, start, end), status_code=206,
+                    media_type="video/mp4", headers=headers)
 
 
 @app.get("/v1/references", response_model=Library)

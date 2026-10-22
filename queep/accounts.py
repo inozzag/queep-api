@@ -17,7 +17,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from queep.account_state import deletion_document, require_open
 from queep.availability import call_read
 from queep.config import firebase_app
-from queep.images import Images, prepare
+from queep.images import STORED_OBJECTS, Images, prepare
 from queep.models import OnboardingProfile
 from queep.repository import Repository
 from queep.usage import inventory, policy, reserve_storage
@@ -185,7 +185,7 @@ class Accounts:
             job_id = self.repo.job(uid, upload["reference_id"]).id
             for prefix in Images.object_prefixes(job_id, upload):
                 # Keep the reservation until existing writers have had time to stop.
-                for name in ("original", "thumbnail", "card", "motion", "loop"):
+                for name in STORED_OBJECTS:
                     try:
                         self.bucket.blob(f"{prefix}/{name}").delete(timeout=20, retry=None)
                     except NotFound:

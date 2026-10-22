@@ -233,6 +233,7 @@ def test_checked_in_openapi_matches_the_app():
     image = saved["components"]["schemas"]["ImageInfo"]["properties"]
     assert image["preview_kind"]["enum"] == ["photo", "video", "gif"]
     assert image["motion"]["default"] is False
+    assert image["clip"]["default"] is False
     retry = saved["components"]["schemas"]["RetryAnalysis"]["properties"]
     assert retry["scope"]["default"] == "fetch"
     assert "media_incomplete" in saved["components"]["schemas"]["Reference"]["properties"]

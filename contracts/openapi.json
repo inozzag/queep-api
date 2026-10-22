@@ -1100,7 +1100,8 @@
             "schema": {
               "enum": [
                 "gallery",
-                "author"
+                "author",
+                "clip"
               ],
               "type": "string",
               "default": "gallery",
@@ -1787,6 +1788,11 @@
           "motion": {
             "type": "boolean",
             "title": "Motion",
+            "default": false
+          },
+          "clip": {
+            "type": "boolean",
+            "title": "Clip",
             "default": false
           }
         },
