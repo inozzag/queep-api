@@ -1144,6 +1144,55 @@
         }
       }
     },
+    "/v1/references/{ref_id}/device-reading": {
+      "put": {
+        "summary": "Store Device Reading",
+        "description": "OCR, speech and colors read on an Apple device. Send it before the image or media.",
+        "operationId": "store_device_reading_v1_references__ref_id__device_reading_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "ref_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Ref Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceReading"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/references/{ref_id}/media": {
       "put": {
         "summary": "Upload Media",
@@ -1670,6 +1719,48 @@
           "kind"
         ],
         "title": "Capture"
+      },
+      "DeviceReading": {
+        "properties": {
+          "screen_text": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "Screen Text",
+            "default": ""
+          },
+          "transcript": {
+            "type": "string",
+            "maxLength": 18000,
+            "title": "Transcript",
+            "default": ""
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/TranscriptSegment"
+            },
+            "type": "array",
+            "maxItems": 600,
+            "title": "Segments"
+          },
+          "colors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 8,
+            "title": "Colors"
+          },
+          "engine": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Engine",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "DeviceReading",
+        "description": "What an Apple device read before uploading an image or media file."
       },
       "Edit": {
         "properties": {
@@ -2350,6 +2441,21 @@
             ],
             "title": "Transcript"
           },
+          "transcript_segments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/TranscriptSegment"
+                },
+                "type": "array",
+                "maxItems": 600
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Transcript Segments"
+          },
           "media_incomplete": {
             "type": "boolean",
             "title": "Media Incomplete",
@@ -2413,6 +2519,11 @@
               }
             ],
             "title": "Space Id"
+          },
+          "verify": {
+            "type": "boolean",
+            "title": "Verify",
+            "default": true
           }
         },
         "additionalProperties": false,
@@ -2642,6 +2753,28 @@
           "name"
         ],
         "title": "SpaceName"
+      },
+      "TranscriptSegment": {
+        "properties": {
+          "start": {
+            "type": "number",
+            "maximum": 301.0,
+            "minimum": 0.0,
+            "title": "Start"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Text"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "start",
+          "text"
+        ],
+        "title": "TranscriptSegment"
       },
       "UsageCounter": {
         "properties": {

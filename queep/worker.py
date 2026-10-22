@@ -12,6 +12,7 @@ from google.auth.transport.requests import Request
 from google.oauth2 import id_token
 from pydantic import BaseModel, ConfigDict, Field
 
+from queep import device
 from queep.ai import (
     AI,
     AIError,
@@ -188,6 +189,9 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
     try:
         ref = work["reference"]
         data = images.read(work["uid"], ref.id)[0] if images and ref.kind == "image" else None
+        reading = None
+        if ref.kind in ("image", "audio", "video") and getattr(jobs, "db", None) is not None:
+            reading = device.load(jobs.db, work["uid"], ref.id)
         if not jobs.current(work):
             return "stale"
         poster_frames = []
@@ -308,7 +312,10 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
             content = evidence(files.read(work["uid"], ref.id)[0], ref.media)
             if not jobs.current(work):
                 return "stale"
-            analysis, transcript = ai.interpret_media(ref, content)
+            if reading and reading.transcript:
+                analysis, transcript = ai.interpret_media(ref, content, reading.transcript)
+            else:
+                analysis, transcript = ai.interpret_media(ref, content)
             ref = ref.model_copy(update={"transcript": transcript})
         elif profile and not (ref.source and (ref.source.text or "").strip()):
             analysis = Interpretation(
@@ -323,7 +330,7 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
                 vision = [page_preview] if page_preview else None
             else:
                 vision = frames or data
-            analysis = ai.interpret(ref, vision)
+            analysis = ai.interpret(ref, vision, reading) if reading else ai.interpret(ref, vision)
         from queep.refetch import media_incomplete as incomplete_read
 
         incomplete = incomplete_read(ref, missed=missed_media, page=page, profile=profile)
@@ -338,7 +345,8 @@ def process_work(task, jobs, ai, images, reader=read_link, media=None):
         return "ready" if jobs.finish(
             work, analysis=analysis, vector=vector, source=ref.source, transcript=transcript,
             title=title, image=ref.image, images=ref.images, author_image=ref.author_image,
-            media_incomplete=incomplete) else "stale"
+            media_incomplete=incomplete,
+            segments=reading.segments if reading and reading.transcript else None) else "stale"
     except (AIError, HTTPException) as error:
         code = str(error) if isinstance(error, AIError) else f"http_{error.status_code}"
         jobs.finish(work, error=code)

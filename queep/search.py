@@ -16,13 +16,13 @@ NEIGHBOR_LIMIT = 50
 CANDIDATE_LIMIT = RESULT_LIMIT
 
 
-def search(repo, ai, uid, query, space_id=None):
+def search(repo, ai, uid, query, space_id=None, verify=True):
     access = policy(repo.db, uid)
     with attribution(plan=access.plan, kind="search", operation_id=uuid4().hex):
-        return search_with_context(repo, ai, uid, query, space_id)
+        return search_with_context(repo, ai, uid, query, space_id, verify)
 
 
-def search_with_context(repo, ai, uid, query, space_id=None):
+def search_with_context(repo, ai, uid, query, space_id=None, verify=True):
     collection = repo.collection(uid)
     if space_id:
         from queep.spaces import Spaces
@@ -52,7 +52,8 @@ def search_with_context(repo, ai, uid, query, space_id=None):
     head, tail = candidates[:HEAD_LIMIT], candidates[HEAD_LIMIT:]
     checker_failed = False
     try:
-        selected = ai.verify(query, head) if head else []
+        # The app filters the head itself when it has an on-device model.
+        selected = ai.verify(query, head) if head and verify else [ref.id for ref in head]
     except AIError:
         # A dead checker must not look like an empty library or spend the search.
         checker_failed = True

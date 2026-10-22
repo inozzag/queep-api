@@ -10,6 +10,7 @@ from firebase_admin import auth
 from google.api_core.exceptions import DeadlineExceeded, FailedPrecondition, ServiceUnavailable
 from pydantic import BaseModel, Field
 
+from queep import device
 from queep.account_state import deletion_document, require_open
 from queep.accounts import Accounts
 from queep.ai import AI, AIError
@@ -27,6 +28,7 @@ from queep.models import (
     ArchiveEdit,
     BatchArchive,
     Capture,
+    DeviceReading,
     Edit,
     ImageInfo,
     Library,
@@ -334,6 +336,12 @@ async def upload_image(ref_id: UUID, request: Request, uid: PaidUID, media: Medi
     return reference
 
 
+@app.put("/v1/references/{ref_id}/device-reading", status_code=204)
+def store_device_reading(ref_id: UUID, reading: DeviceReading, uid: PaidUID):
+    """OCR, speech and colors read on an Apple device. Send it before the image or media."""
+    device.store(database(), uid, str(ref_id), reading)
+
+
 @app.put("/v1/references/{ref_id}/media", response_model=Reference)
 async def upload_media(ref_id: UUID, request: Request, uid: UID, subscriptions: Subscriptions,
                        background: BackgroundTasks,
@@ -474,7 +482,8 @@ def retry_analysis(ref_id: UUID, capture: RetryAnalysis, uid: PaidUID,
 def find_references(capture: Search, uid: PaidUID, repo: Repo, ai: Annotated[AI, Depends(engine)]):
     try:
         return search(repo, ai, uid, capture.query,
-                      str(capture.space_id) if capture.space_id else None)
+                      str(capture.space_id) if capture.space_id else None,
+                      verify=capture.verify)
     except (AIError, FailedPrecondition, DeadlineExceeded, ServiceUnavailable) as exc:
         raise HTTPException(
             503, "A busca está temporariamente indisponível. Tente novamente.",

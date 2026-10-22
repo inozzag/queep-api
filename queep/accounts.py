@@ -173,7 +173,8 @@ class Accounts:
             prefixes.add(profile["avatar_prefix"])
         for prefix in prefixes:
             self.delete_avatar_objects(uid, prefix)
-        for name in ("references", "usage", "fair_use", "inventory", "spaces"):
+        for name in ("references", "usage", "fair_use", "inventory", "spaces",
+                     "device_readings"):
             more = self.erase_batch(root.collection(name)) or more
         root.delete()
         self.db.collection("billing_access").document(hashlib.sha256(uid.encode()).hexdigest()).delete()

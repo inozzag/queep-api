@@ -139,7 +139,8 @@ class Jobs:
                     and job["state"] == "processing" and job["lease_until"] > datetime.now(UTC))
 
     def finish(self, work, analysis=None, vector=None, error=None, source=None, transcript=None,
-               title=None, image=None, images=None, author_image=None, media_incomplete=False):
+               title=None, image=None, images=None, author_image=None, media_incomplete=False,
+               segments=None):
         doc = self.repo.jobs().document(work["job_id"])
         ref = self.repo.collection(work["uid"]).document(work["reference_id"])
         now = datetime.now(UTC)
@@ -172,6 +173,8 @@ class Jobs:
                            "analysis_model": INTERPRETER["id"],
                            "analysis_version": ANALYSIS_VERSION, "updated_at": now,
                            "media_incomplete": bool(media_incomplete)}
+                if segments:
+                    payload["transcript_segments"] = [item.model_dump() for item in segments]
                 if title and not (record.get("title") or "").strip():
                     payload["title"] = title
                 if image and not record.get("image"):
