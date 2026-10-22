@@ -83,3 +83,31 @@ def test_enqueue_requires_the_serving_version_and_queues_fetch(capsys):
     assert stored["status"] == "queued" and stored["media_incomplete"] is False
     job = repo.job(uid, error.id).get().to_dict()
     assert job["scope"] == "fetch" and job["state"] == "pending"
+
+
+def test_clip_cohort_selects_only_post_videos_without_a_stored_clip(capsys):
+    repo = Repository(database())
+    uid = uuid4().hex
+    post = "https://x.com/a/status/{}"
+    loop_only = _ready(repo, uid, post.format(1), images=[
+        {"sha256": "a" * 64, "preview_kind": "video", "motion": True}])
+    still = _ready(repo, uid, post.format(2), images=[
+        {"sha256": "b" * 64, "preview_kind": "video", "motion": False}],
+        media_incomplete=True)
+    _ready(repo, uid, post.format(3), images=[
+        {"sha256": "c" * 64, "preview_kind": "video", "motion": True, "clip": True}])
+    _ready(repo, uid, post.format(4), images=[
+        {"sha256": "d" * 64, "preview_kind": "gif", "motion": True}])
+    _ready(repo, uid, post.format(5), images=[{"sha256": "e" * 64, "preview_kind": "photo"}])
+    assert main(["--uid", uid, "--cohort", "clip"]) == 0
+    out = capsys.readouterr().out
+    assert "eligible: 2" in out and "clip=2" in out
+    assert loop_only in out and still in out
+
+
+def test_clip_cohort_needs_an_owner(capsys):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        main(["--cohort", "clip"])
+    assert "--uid" in capsys.readouterr().err

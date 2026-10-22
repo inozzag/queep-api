@@ -11,6 +11,8 @@ from urllib.parse import urlsplit
 
 FETCH_COOLDOWN = timedelta(minutes=10)
 COHORTS = ("error", "unavailable", "author_only", "poster", "media_incomplete")
+# Opt-in only (`reprocess --cohort clip`): posts saved before full clips were kept.
+CLIP_COHORT = "clip"
 
 
 def host_of(url):
@@ -41,6 +43,14 @@ def video_without_motion(record):
         isinstance(item, dict)
         and item.get("preview_kind") in ("video", "gif")
         and not item.get("motion")
+        for item in gallery(record)
+    )
+
+
+def video_without_clip(record):
+    """A post video whose full clip, with its sound, is not stored yet."""
+    return any(
+        isinstance(item, dict) and item.get("preview_kind") == "video" and not item.get("clip")
         for item in gallery(record)
     )
 
@@ -82,12 +92,19 @@ def eligible_retry(record):
     return video_without_motion(record)
 
 
-def classify(record, exclude_hosts=()):
-    """Reprocess cohort, or None when the row should be left alone."""
+def classify(record, exclude_hosts=(), *, clips=False):
+    """Reprocess cohort, or None when the row should be left alone.
+
+    With `clips`, only finished post videos without a stored clip are selected.
+    """
     if record.get("deleted") or excluded_host(record, exclude_hosts):
         return None
     status = record.get("status")
     if status in {"queued", "processing"}:
+        return None
+    if clips:
+        if status == "ready" and record.get("kind") == "link" and video_without_clip(record):
+            return CLIP_COHORT
         return None
     if status == "error":
         return "error"

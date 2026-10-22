@@ -11,6 +11,10 @@ when ``--scope fetch`` is requested, so these cohorts stay in one place.
 
 Cohorts, in order: error, unavailable source, author-only Instagram,
 video or GIF without motion, then any other ``media_incomplete`` row.
+
+``--cohort clip`` selects only finished post videos whose full clip is not
+stored, for an owner on Pro or Max (posts saved before clips were kept). It
+needs ``--uid``: on Free the clip would be dropped and the reanalysis wasted.
 ``--exclude-host`` drops a host. Dribbble is not in the default list.
 """
 
@@ -20,7 +24,7 @@ import time
 from datetime import UTC, datetime
 
 from queep.ai import ANALYSIS_VERSION
-from queep.refetch import COHORTS, classify
+from queep.refetch import CLIP_COHORT, COHORTS, classify
 
 PROVIDER_REANALYZE_USD = 0.0035
 PROVIDER_VIDEO_USD = 0.010
@@ -50,11 +54,11 @@ def reserve_usd(record):
     return RESERVE_USD * calls
 
 
-def plan(rows, exclude_hosts, *, limit, max_cost):
+def plan(rows, exclude_hosts, *, limit, max_cost, clips=False):
     ranked = []
-    order = {name: index for index, name in enumerate(COHORTS)}
+    order = {name: index for index, name in enumerate((*COHORTS, CLIP_COHORT))}
     for uid, record in rows:
-        cohort = classify(record, exclude_hosts)
+        cohort = classify(record, exclude_hosts, clips=clips)
         if not cohort:
             continue
         ranked.append({
@@ -83,7 +87,7 @@ def plan(rows, exclude_hosts, *, limit, max_cost):
 
 
 def format_report(ranked, selected, spent, reserved, stopped, mode):
-    counts = {name: 0 for name in COHORTS}
+    counts = {name: 0 for name in (*COHORTS, CLIP_COHORT)}
     for item in selected:
         counts[item["cohort"]] += 1
     lines = [
@@ -94,7 +98,7 @@ def format_report(ranked, selected, spent, reserved, stopped, mode):
         f"selected: {len(selected)}",
         f"estimated_provider_usd: {spent:.4f}",
         f"reserve_usd: {reserved:.4f}",
-        "cohorts: " + ", ".join(f"{name}={counts[name]}" for name in COHORTS),
+        "cohorts: " + ", ".join(f"{name}={count}" for name, count in counts.items()),
         f"stopped: {stopped or 'no'}",
     ]
     for item in selected:
@@ -148,7 +152,10 @@ def parse_args(argv):
     parser.add_argument("--max-cost-usd", type=float, default=DEFAULT_MAX_COST_USD)
     parser.add_argument("--rate", type=float, default=DEFAULT_RATE_SECONDS)
     parser.add_argument("--exclude-host", action="append", default=[])
+    parser.add_argument("--cohort", choices=[CLIP_COHORT], default=None)
     args = parser.parse_args(argv)
+    if args.cohort == CLIP_COHORT and not args.uid:
+        parser.error("--cohort clip needs --uid (an owner on Pro or Max)")
     if args.limit is not None and args.limit < 1:
         parser.error("--limit must be >= 1")
     if args.max_cost_usd < 0:
@@ -172,7 +179,8 @@ def main(argv=None, *, sleep=time.sleep, now=None):
     db = database()
     rows = load_rows(db, args.uid)
     ranked, selected, spent, reserved, stopped = plan(
-        rows, tuple(args.exclude_host), limit=args.limit, max_cost=args.max_cost_usd)
+        rows, tuple(args.exclude_host), limit=args.limit, max_cost=args.max_cost_usd,
+        clips=args.cohort == CLIP_COHORT)
     mode = "enqueue" if args.enqueue else "dry-run"
     if args.enqueue:
         repo = Repository(db)
